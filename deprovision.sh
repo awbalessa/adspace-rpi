@@ -69,8 +69,15 @@ userdel -r aiagent 2>/dev/null || warn "aiagent user not found or already remove
 log "Removing adspace user..."
 userdel -r adspace 2>/dev/null || warn "adspace user not found or already removed"
 
+log "Logging out of Tailscale..."
+if command -v tailscale &>/dev/null; then
+    tailscale logout 2>/dev/null || true
+fi
+# Note: we don't uninstall Tailscale itself — provision.sh skips reinstall if already present
+
 log ""
 log "────────────────────────────────────────────────────────"
 log "✓  Deprovision complete. Pi is back to bare OS state."
-log "   Run provision.sh to reprovision."
+log "   Run provision.sh to reprovision:"
+log "   TAILSCALE_AUTH_KEY=tskey-auth-xxx ssh pi@<ip> 'sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s' < provision.sh"
 log "────────────────────────────────────────────────────────"

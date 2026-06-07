@@ -131,27 +131,34 @@ rpi/
 - Pi connected to internet via ethernet for initial setup
 - Mac with Go installed (`brew install go`) and pnpm (`brew install pnpm`)
 
-### Step 1 — Run provision script
+### Step 1 — Get a Tailscale auth key
+Go to [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) → Generate auth key.
+- ✅ Reusable (so you can use the same key for every Pi)
+- ✅ Ephemeral: No (devices should persist)
+- Tag: `adspace-pi` (optional but useful for filtering)
+
+### Step 2 — Run provision script
 ```bash
-# From this repo on your Mac:
-ssh pi@<pi-ip-address> "sudo bash -s" < provision.sh
+# From this repo on your Mac — pass the Tailscale key as an env var:
+TAILSCALE_AUTH_KEY=tskey-auth-xxx \
+  ssh pi@<pi-ip-address> "sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" < provision.sh
 ```
 
-This is fully idempotent — safe to re-run.
+This is fully idempotent — safe to re-run. If you omit the key, Tailscale is installed but not authenticated (you can auth manually later with `sudo tailscale up --auth-key=...`).
 
-### Step 2 — Add your SSH key to aiagent
+### Step 3 — Add your SSH key to aiagent
 ```bash
 # Copy your key so you can SSH as aiagent going forward
 ssh-copy-id -i ~/.ssh/your-key aiagent@<pi-ip-address>
 ```
 
-### Step 3 — Deploy the app
+### Step 4 — Deploy the app
 ```bash
 # Build + deploy frontend and API binary
 make deploy
 ```
 
-### Step 4 — Reboot and verify
+### Step 5 — Reboot and verify
 ```bash
 ssh aiagent@<pi-ip-address> sudo reboot
 ```

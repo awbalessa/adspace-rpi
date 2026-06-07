@@ -5,25 +5,35 @@
 # Run ONCE on a fresh Raspberry Pi OS Lite 64-bit (Debian Trixie/Bookworm).
 # Safe to re-run — fully idempotent. Same input → same output, no side effects.
 #
+# Pre-requisites:
+#   - RPi OS Lite 64-bit flashed via Raspberry Pi Imager
+#   - In Imager settings: SSH enabled, user pi created, ethernet connected
+#   - Internet access on the Pi
+#
 # Usage (from your Mac):
 #   ssh pi@<ip> "sudo bash -s" < provision.sh
 #
-# Pre-requisites on the Pi:
-#   - RPi OS Lite 64-bit, fresh flash
-#   - SSH enabled (create /boot/ssh file or use Raspberry Pi Imager)
-#   - Internet access (to install packages)
+# Tailscale auth key (required for remote SSH access):
+#   Get a reusable auth key from https://login.tailscale.com/admin/settings/keys
+#   Pass it as an environment variable:
+#
+#   TAILSCALE_AUTH_KEY=tskey-auth-xxx ssh pi@<ip> "sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" < provision.sh
+#
+#   If not provided, Tailscale is installed but NOT authenticated.
+#   You can authenticate manually later: sudo tailscale up --auth-key=tskey-auth-xxx
 #
 # What this does:
 #   1.  Creates 'adspace' user with correct groups
 #   2.  Creates 'aiagent' user with scoped sudoers for remote agent access
-#   3.  Installs deps: chromium, labwc, caddy, network-manager, unclutter
+#   3.  Installs deps: chromium, labwc, caddy, network-manager, unclutter, tailscale
 #   4.  Configures autologin for adspace on tty1
 #   5.  Writes /opt/adspace/{watchdog.sh,start-kiosk.sh,start-setup-display.sh,kiosk.env}
 #   6.  Writes labwc autostart
 #   7.  Writes Caddyfile
 #   8.  Installs systemd units: adspace-kiosk, adspace-watchdog, adspace-setup-api
-#   9.  Creates adspace-hotspot nmcli profile (SSID/password set at runtime by watchdog)
-#   10. Enables adspace-watchdog (only service that starts on boot)
+#   9.  Sets hostname to adspace-{cpu_serial}
+#   10. Creates adspace-hotspot nmcli profile
+#   11. Installs + authenticates Tailscale
 #
 # After running this script, deploy the frontend + API binary:
 #   make deploy        (from repo root on your Mac)
@@ -460,13 +470,48 @@ nmcli con add \
     ipv4.addresses 192.168.4.1/24 \
     ipv6.method disabled
 
+# ── 11. Tailscale ─────────────────────────────────────────────────────────────
+log "Installing Tailscale..."
+if ! command -v tailscale &>/dev/null; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+else
+    log "Tailscale already installed — skipping"
+fi
+
+systemctl enable --now tailscaled
+
+if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
+    log "Authenticating Tailscale..."
+    # --ssh enables Tailscale SSH as a fallback
+    # --hostname sets the device name in the Tailscale admin panel
+    CPU_SERIAL_TS=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
+    tailscale up \
+        --auth-key="${TAILSCALE_AUTH_KEY}" \
+        --hostname="adspace-${CPU_SERIAL_TS}" \
+        --accept-routes \
+        --ssh
+    log "Tailscale authenticated as adspace-${CPU_SERIAL_TS}"
+else
+    warn "TAILSCALE_AUTH_KEY not set — Tailscale installed but not authenticated."
+    warn "Authenticate manually: sudo tailscale up --auth-key=tskey-auth-xxx"
+fi
+
 log ""
 log "────────────────────────────────────────────────────────"
 log "✓  Provision complete!"
 log ""
+log "Hostname:  $(hostname)"
+if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+    log "Tailscale: $(tailscale ip -4 2>/dev/null || echo 'not authenticated yet')"
+fi
+log ""
 log "Next steps:"
-log "  1. From your Mac, deploy the app:  make deploy"
-log "  2. Reboot the Pi:                  ssh <user>@<ip> sudo reboot"
-log "  3. Verify kiosk boots correctly"
-log "  4. If this is for a golden image:  sudo bash clone-image.sh"
+log "  1. Add your SSH key to aiagent:"
+log "     ssh-copy-id -i ~/.ssh/your-key.pub aiagent@<ip>"
+log "  2. Deploy the app from your Mac:"
+log "     make deploy"
+log "  3. Reboot:"
+log "     ssh pi@<ip> sudo reboot"
+log "  4. SSH via Tailscale after reboot:"
+log "     ssh aiagent@$(hostname)"
 log "────────────────────────────────────────────────────────"
