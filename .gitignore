@@ -8,6 +8,9 @@ wifi-setup-api/wifi-setup-api
 wifi-setup/public/config.json
 wifi-setup/dist/config.json
 
+# Local secrets — never commit
+.env
+
 # OS / editor
 .DS_Store
 *.swp

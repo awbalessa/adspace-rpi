@@ -31,16 +31,23 @@ section() { echo -e "\n${CYAN}━━━ $* ━━━${NC}"; }
 warn()    { echo -e "${YELLOW}WARN${NC} $*"; }
 die()     { echo -e "${RED}ERROR${NC} $*" >&2; exit 1; }
 
+# ── Load .env if present ─────────────────────────────────────────────────────
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$REPO_DIR/.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a; source "$REPO_DIR/.env"; set +a
+fi
+
 # ── Args ──────────────────────────────────────────────────────────────────────
 PI_IP="${1:-}"
-TAILSCALE_KEY="${2:-}"
+TAILSCALE_KEY="${2:-${TAILSCALE_AUTH_KEY:-}}"
 SKIP_PROVISION="${3:-}"
 
 [[ -n "$PI_IP" ]] || die "Usage: ./flash.sh <pi-ip> [tailscale-auth-key] [--skip-provision]"
+[[ -n "$TAILSCALE_KEY" ]] || warn "No Tailscale key found — set TAILSCALE_AUTH_KEY in .env or pass as second arg"
 
 PI_USER="pi"
 PI_SSH="${PI_USER}@${PI_IP}"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 section "AdSpace Pi Flash — target: $PI_SSH"
 
