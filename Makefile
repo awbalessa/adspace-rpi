@@ -1,14 +1,16 @@
 # AdSpace RPi — root Makefile
-# Builds and deploys both the frontend and Go API to the Pi.
 #
-# Targets:
-#   make deploy              — build + deploy everything
+# ── Full device setup (new Pi) ─────────────────────────────────────────
+#   make flash IP=192.168.1.50 TS_KEY=tskey-auth-xxx
+#
+# ── Day-to-day deploy (existing Pi) ───────────────────────────────
+#   make deploy              — frontend + API to dev Pi
 #   make deploy-front        — frontend only
-#   make deploy-api          — Go API only
-#   make logs                — tail watchdog + kiosk logs on Pi
-#   make ssh                 — open SSH session to Pi
+#   make deploy-api          — API binary only
+#   make logs                — tail all adspace logs
+#   make ssh                 — open shell on dev Pi
 #
-# Override target Pi (e.g. for a new device):
+# Override target Pi:
 #   make deploy PI_SSH=adspace@192.168.1.50
 
 PI_SSH    ?= adspace@rpi5-4gb
@@ -16,8 +18,14 @@ PI_KEY    := ~/.ssh/coding-agent
 SSH       := ssh -i $(PI_KEY) $(PI_SSH)
 SCP       := scp -i $(PI_KEY)
 
-.PHONY: deploy deploy-front deploy-api logs ssh
+.PHONY: flash deploy deploy-front deploy-api logs ssh
 
+# ── Full flash (provision + deploy + reboot) ──────────────────────────
+flash:
+	@[[ -n "$(IP)" ]] || (echo "Usage: make flash IP=<pi-ip> TS_KEY=<tailscale-key>"; exit 1)
+	@bash flash.sh "$(IP)" "$(TS_KEY)"
+
+# ── Day-to-day deploy ──────────────────────────────────────────────
 deploy: deploy-front deploy-api
 
 deploy-front:
