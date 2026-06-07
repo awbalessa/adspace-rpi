@@ -6,10 +6,10 @@
 # at a venue. Hostname is used by Tailscale for SSH access.
 #
 # Usage:
-#   ssh aiagent@<ip> "sudo bash -s" < rename-device.sh <new-name>
+#   ssh pi@<ip> "sudo bash -s" < rename-device.sh <new-name>
 #
 # Example:
-#   ssh aiagent@192.168.1.50 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
+#   ssh pi@192.168.1.50 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
 #
 # Naming convention:
 #   adspace-{city/venue slug}-{2-digit index}
@@ -18,7 +18,7 @@
 #        adspace-cairo-downtown-01
 #
 # After rename, SSH access becomes:
-#   ssh aiagent@adspace-dubai-mall-01   (via Tailscale)
+#   ssh pi@adspace-dubai-mall-01   (via Tailscale)
 # =============================================================================
 
 set -euo pipefail
@@ -59,5 +59,5 @@ log "   Reboot for all changes to take effect:"
 log "   sudo reboot"
 log ""
 log "   After reboot, SSH via Tailscale:"
-log "   ssh aiagent@$NEW_NAME"
+log "   ssh pi@$NEW_NAME"
 log "────────────────────────────────────────────────────────"

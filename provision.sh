@@ -106,34 +106,13 @@ for grp in adm dialout cdrom sudo audio video plugdev games users input \
     getent group "$grp" &>/dev/null && usermod -aG "$grp" adspace
 done
 
-# ── 5. Create aiagent user ────────────────────────────────────────────────────
-log "Creating aiagent user..."
-if ! id aiagent &>/dev/null; then
-    useradd -m -s /bin/bash aiagent
+# ── 5. Ensure pi user has passwordless sudo ──────────────────────────────────
+# pi user already exists on RPi OS Lite — just ensure NOPASSWD sudo is set
+log "Configuring pi user sudo..."
+if ! grep -q 'pi ALL=(ALL) NOPASSWD:ALL' /etc/sudoers.d/010_pi-nopasswd 2>/dev/null; then
+    echo 'pi ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/010_pi-nopasswd
+    chmod 440 /etc/sudoers.d/010_pi-nopasswd
 fi
-mkdir -p /home/aiagent/.ssh
-chmod 700 /home/aiagent/.ssh
-chown aiagent:aiagent /home/aiagent/.ssh
-
-# Scoped sudoers — only what remote management actually needs
-cat > /etc/sudoers.d/aiagent << 'EOF'
-# AdSpace AI agent — scoped remote management
-aiagent ALL=(ALL) NOPASSWD: \
-    /usr/bin/systemctl start adspace-*, \
-    /usr/bin/systemctl stop adspace-*, \
-    /usr/bin/systemctl restart adspace-*, \
-    /usr/bin/systemctl status adspace-*, \
-    /usr/bin/systemctl daemon-reload, \
-    /usr/bin/journalctl, \
-    /usr/bin/nmcli, \
-    /bin/mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api, \
-    /bin/chmod +x /opt/adspace/wifi-setup-api, \
-    /usr/bin/tee /opt/adspace/watchdog.sh, \
-    /usr/bin/tee /opt/adspace/start-kiosk.sh, \
-    /usr/bin/tee /opt/adspace/start-setup-display.sh, \
-    /usr/bin/tee /opt/adspace/kiosk.env
-EOF
-chmod 440 /etc/sudoers.d/aiagent
 
 # ── 6. Autologin adspace on tty1 ─────────────────────────────────────────────
 log "Configuring tty1 autologin..."

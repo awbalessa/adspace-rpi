@@ -1,5 +1,5 @@
-PI_SSH  := aiagent@rpi5-4gb
-PI_KEY  := ~/.ssh/coding-agent
+PI_SSH  := pi@adspace-4d919699
+PI_KEY  := ~/.ssh/ai-agent
 SSH     := ssh -i $(PI_KEY) $(PI_SSH)
 SCP     := scp -i $(PI_KEY)
 BINARY  := wifi-setup-api

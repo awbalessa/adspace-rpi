@@ -26,7 +26,7 @@ adspace-riyadh-airport-02
 
 Tailscale is enrolled on every Pi, so once renamed you can SSH from anywhere without knowing the IP:
 ```bash
-ssh aiagent@adspace-dubai-mall-01
+ssh pi@adspace-dubai-mall-01
 ```
 
 ### Setting up SSH access
@@ -53,13 +53,13 @@ Host rpi-ai
     User pi
 ```
 
-**For the AI agent specifically:** the agent uses the `aiagent` user with scoped sudo. Configure it to SSH as:
+**For the AI agent specifically:** the agent uses the `pi` user with scoped sudo. Configure it to SSH as:
 ```bash
-ssh aiagent@adspace-4d919699
+ssh pi@adspace-4d919699
 # or via the rpi-ai alias if ~/.ssh/config is set up
 ```
 
-### What `aiagent` can sudo
+### What `pi` can sudo
 Defined in `/etc/sudoers.d/aiagent` — scoped to exactly what's needed:
 
 | Command | Purpose |
@@ -94,14 +94,14 @@ make deploy-api
 # Or manually:
 cd wifi-setup-api
 GOOS=linux GOARCH=arm64 go build -o wifi-setup-api .
-scp -i ~/.ssh/coding-agent wifi-setup-api aiagent@rpi5-4gb:/tmp/wifi-setup-api-new
+scp -i ~/.ssh/coding-agent wifi-setup-api pi@rpi5-4gb:/tmp/wifi-setup-api-new
 ssh rpi-ai "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
          && sudo chmod +x /opt/adspace/wifi-setup-api \
          && sudo systemctl restart adspace-setup-api.service"
 ```
 
 > **Never** use `adspace@rpi5-4gb` for deployment — that user requires password sudo.
-> Always use `aiagent@rpi5-4gb` with the SSH key.
+> Always use `pi@rpi5-4gb` with the SSH key.
 
 ### Watchdog / shell scripts
 Edit locally, then push to Pi:

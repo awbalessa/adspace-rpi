@@ -13,7 +13,7 @@
 # Override target Pi:
 #   make deploy PI_SSH=adspace@192.168.1.50
 
-PI_SSH    ?= adspace@rpi5-4gb
+PI_SSH    ?= pi@adspace-4d919699
 PI_KEY    := ~/.ssh/coding-agent
 SSH       := ssh -i $(PI_KEY) $(PI_SSH)
 SCP       := scp -i $(PI_KEY)

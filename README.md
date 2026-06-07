@@ -201,7 +201,7 @@ make deploy
 > `make deploy` uses `adspace@rpi5-4gb` by default. For a new Pi, override the target:
 > ```bash
 > PI_SSH=adspace@<ip> make deploy-front
-> # API deploy uses aiagent — update PI_SSH in Makefile or pass directly
+> # API deploy uses pi — update PI_SSH in Makefile or pass directly
 > ```
 
 ### Step 4 — Reboot and verify
@@ -269,15 +269,15 @@ pnpm dev
 ### SSH
 ```bash
 # Via hostname (requires Pi on Tailscale or same network)
-ssh -i ~/.ssh/coding-agent aiagent@rpi5-4gb
+ssh -i ~/.ssh/coding-agent pi@rpi5-4gb
 
 # Via IP
-ssh -i ~/.ssh/coding-agent aiagent@<ip>
+ssh -i ~/.ssh/coding-agent pi@<ip>
 
 # Shortcut alias (add to ~/.ssh/config):
 Host rpi-ai
     HostName rpi5-4gb
-    User aiagent
+    User pi
     IdentityFile ~/.ssh/coding-agent
 ```
 
@@ -286,7 +286,7 @@ Then: `ssh rpi-ai`
 ### Tailscale (remote access)
 The Pi is enrolled in Tailscale as `rpi5-4gb`. Once on the Tailscale network you can SSH from anywhere:
 ```bash
-ssh aiagent@rpi5-4gb
+ssh pi@rpi5-4gb
 ```
 
 ### Hotspot (setup mode)
@@ -374,7 +374,7 @@ ssh pi@<ip> "sudo bash -s" < provision.sh
 make deploy
 
 # Step 4 — Reboot and verify
-ssh aiagent@<ip> sudo reboot
+ssh pi@<ip> sudo reboot
 ```
 
 **What to verify after reboot:**
@@ -398,12 +398,12 @@ This is **hardware-burned and unique per board** — safe for SD card cloning (u
 
 Once a Pi is installed at a venue, rename it:
 ```bash
-ssh aiagent@adspace-4d919699 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
+ssh pi@adspace-4d919699 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
 ```
 
 After rename + reboot, SSH via Tailscale from anywhere:
 ```bash
-ssh aiagent@adspace-dubai-mall-01
+ssh pi@adspace-dubai-mall-01
 ```
 
 **Naming convention:**

@@ -1,4 +1,4 @@
-PI_HOST := adspace@rpi5-4gb
+PI_HOST := pi@adspace-4d919699
 PI_PATH := /opt/adspace/wifi-setup/dist
 
 .PHONY: build deploy
