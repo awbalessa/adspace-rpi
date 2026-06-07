@@ -69,10 +69,10 @@ log "Configuring NetworkManager..."
 cat > /etc/NetworkManager/NetworkManager.conf << 'EOF'
 [main]
 dns=dnsmasq
-plugins=keyfile
+plugins=ifupdown,keyfile
 
 [ifupdown]
-managed=true
+managed=false
 EOF
 
 systemctl enable --now NetworkManager
