@@ -297,6 +297,63 @@ ssh rpi-ai "sudo rm -rf /home/adspace/.config/adspace-chromium"
 
 ---
 
+## Testing provision.sh (without reflashing)
+
+Before cutting a golden image, test the full provision on your dev Pi by deprovisioning and reprovisioning in place. Faster than reflashing, catches all the same issues.
+
+```bash
+# Step 1 — Wipe all adspace config (simulates a fresh Pi)
+ssh pi@<ip> "sudo bash -s" < deprovision.sh
+
+# Step 2 — Reprovision from scratch
+ssh pi@<ip> "sudo bash -s" < provision.sh
+
+# Step 3 — Deploy the app
+make deploy
+
+# Step 4 — Reboot and verify
+ssh aiagent@<ip> sudo reboot
+```
+
+**What to verify after reboot:**
+- [ ] With ethernet plugged in: TV shows `screen.adspace.so` within 30s
+- [ ] Ethernet unplugged + no saved WiFi: setup screen appears, hotspot `Adspace-TV-{serial}` visible
+- [ ] Phone connects to hotspot → opens `http://192.168.4.1` → WiFi form with network dropdown
+- [ ] Submit valid WiFi creds → TV transitions to kiosk within 15s
+- [ ] Unplug ethernet, saved WiFi in range: Pi auto-reconnects within 60s
+- [ ] `make logs` shows clean watchdog transitions
+
+---
+
+## Pi naming
+
+Each Pi gets a hostname based on its CPU serial number during provisioning:
+```
+adspace-{8-char cpu serial}    e.g. adspace-4d919699
+```
+
+This is **hardware-burned and unique per board** — safe for SD card cloning (unlike `/etc/machine-id` which gets cloned identically).
+
+Once a Pi is installed at a venue, rename it:
+```bash
+ssh aiagent@adspace-4d919699 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
+```
+
+After rename + reboot, SSH via Tailscale from anywhere:
+```bash
+ssh aiagent@adspace-dubai-mall-01
+```
+
+**Naming convention:**
+```
+adspace-{city/venue}-{2-digit index}
+adspace-dubai-mall-01
+adspace-riyadh-airport-01
+adspace-cairo-downtown-02
+```
+
+---
+
 ## Golden image (fleet provisioning)
 
 Once a Pi is provisioned and verified, clone its SD card to flash all future Pis instantly.

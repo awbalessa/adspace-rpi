@@ -15,28 +15,80 @@ One always-on systemd service (`adspace-watchdog`) drives all state transitions.
 
 ## SSH access
 
-```
-Host: rpi5-4gb  (or IP directly)
-User: aiagent
-Key:  ~/.ssh/coding-agent
+### Pi naming
+Each Pi's hostname follows the pattern `adspace-{cpu_serial}` by default (set during provisioning). After a device is installed at a venue it can be renamed with `rename-device.sh`:
 
-Shortcut (add to ~/.ssh/config):
-  Host rpi-ai
-      HostName rpi5-4gb
-      User aiagent
-      IdentityFile ~/.ssh/coding-agent
+```
+adspace-{cpu_serial}          default, e.g. adspace-4d919699
+adspace-dubai-mall-01         after venue rename
+adspace-riyadh-airport-02
 ```
 
-The `aiagent` user has scoped sudo (defined in `/etc/sudoers.d/aiagent`). You can:
-- `sudo systemctl start/stop/restart/status adspace-*`
-- `sudo journalctl`
-- `sudo nmcli`
-- `sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api`
-- `sudo chmod +x /opt/adspace/wifi-setup-api`
-- `sudo tee /opt/adspace/watchdog.sh` (and other scripts)
-- `sudo systemctl daemon-reload`
+Tailscale is enrolled on every Pi, so once renamed you can SSH from anywhere without knowing the IP:
+```bash
+ssh aiagent@adspace-dubai-mall-01
+```
 
-You cannot: install packages, modify systemd units, or edit files outside `/opt/adspace/` (use `adspace` user or ask a human for those operations).
+### Setting up the AI agent SSH key
+
+**Step 1 — Generate a dedicated key for the agent** (do this once on your dev machine):
+```bash
+ssh-keygen -t ed25519 -C "adspace-ai-agent" -f ~/.ssh/adspace-agent
+# No passphrase — agents can't type passphrases
+```
+
+**Step 2 — Add the key to the Pi** (after provisioning):
+```bash
+# If you can still SSH as pi/aiagent:
+ssh-copy-id -i ~/.ssh/adspace-agent.pub aiagent@<pi-ip>
+
+# Or manually:
+cat ~/.ssh/adspace-agent.pub | ssh pi@<pi-ip> \
+  "sudo mkdir -p /home/aiagent/.ssh && \
+   sudo tee -a /home/aiagent/.ssh/authorized_keys && \
+   sudo chown -R aiagent:aiagent /home/aiagent/.ssh && \
+   sudo chmod 700 /home/aiagent/.ssh && \
+   sudo chmod 600 /home/aiagent/.ssh/authorized_keys"
+```
+
+**Step 3 — Configure your SSH config** (`~/.ssh/config`):
+```
+# AdSpace Pi — wildcard matches all device names
+Host adspace-*
+    User aiagent
+    IdentityFile ~/.ssh/adspace-agent
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Dev Pi alias
+Host rpi-ai
+    HostName rpi5-4gb
+    User aiagent
+    IdentityFile ~/.ssh/coding-agent
+```
+
+**Step 4 — Configure your coding agent** to use this key. For pi (this agent harness):
+```bash
+# In your pi session, the agent uses whatever SSH config you have.
+# Point it at the right host:
+ssh rpi-ai "echo connected"
+```
+
+### What `aiagent` can sudo
+Defined in `/etc/sudoers.d/aiagent` — scoped to exactly what's needed:
+
+| Command | Purpose |
+|---------|--------|
+| `systemctl start/stop/restart/status adspace-*` | Control adspace services |
+| `journalctl` | Read logs |
+| `nmcli` | Inspect network state |
+| `mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api` | Deploy API binary |
+| `chmod +x /opt/adspace/wifi-setup-api` | Make binary executable |
+| `tee /opt/adspace/*.sh` | Update scripts |
+| `tee /opt/adspace/kiosk.env` | Update kiosk config |
+| `systemctl daemon-reload` | Pick up unit file changes |
+
+**Cannot**: install packages, modify systemd unit files, create users, access other users' home dirs, run arbitrary commands as root. If you need something outside this scope, ask a human to run it manually or expand sudoers via `provision.sh`.
 
 ---
 

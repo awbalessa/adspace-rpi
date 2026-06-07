@@ -426,7 +426,21 @@ systemctl enable  adspace-kiosk.service     # unit exists, but watchdog calls sy
 systemctl disable adspace-kiosk.service     # ... so don't auto-start independently
 systemctl disable adspace-setup-api.service 2>/dev/null || true
 
-# ── 9. adspace-hotspot nmcli profile ─────────────────────────────────────────
+# ── 9. Set hostname from CPU serial ─────────────────────────────────────────
+log "Setting hostname from CPU serial..."
+CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
+NEW_HOSTNAME="adspace-${CPU_SERIAL}"
+OLD_HOSTNAME=$(hostname)
+if [ "$OLD_HOSTNAME" != "$NEW_HOSTNAME" ]; then
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    sed -i "s/127\.0\.1\.1\s.*$/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts 2>/dev/null || true
+    grep -q '127.0.1.1' /etc/hosts || echo "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
+    log "Hostname set to $NEW_HOSTNAME (was $OLD_HOSTNAME)"
+else
+    log "Hostname already $NEW_HOSTNAME — no change"
+fi
+
+# ── 10. adspace-hotspot nmcli profile ────────────────────────────────────────
 log "Creating adspace-hotspot nmcli profile..."
 # Delete and recreate — idempotent
 nmcli con delete adspace-hotspot 2>/dev/null || true
