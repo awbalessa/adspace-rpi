@@ -146,26 +146,35 @@ TAILSCALE_AUTH_KEY=tskey-auth-xxx \
 
 This is fully idempotent — safe to re-run. If you omit the key, Tailscale is installed but not authenticated (you can auth manually later with `sudo tailscale up --auth-key=...`).
 
-### Step 3 — Add your SSH key to aiagent
+### Step 3 — Deploy the app
 ```bash
-# Copy your key so you can SSH as aiagent going forward
-ssh-copy-id -i ~/.ssh/your-key aiagent@<pi-ip-address>
-```
-
-### Step 4 — Deploy the app
-```bash
-# Build + deploy frontend and API binary
+# Build + deploy frontend and API binary to Pi
 make deploy
 ```
 
-### Step 5 — Reboot and verify
+> `make deploy` uses `adspace@rpi5-4gb` by default. For a new Pi, override the target:
+> ```bash
+> PI_SSH=adspace@<ip> make deploy-front
+> # API deploy uses aiagent — update PI_SSH in Makefile or pass directly
+> ```
+
+### Step 4 — Reboot and verify
 ```bash
-ssh aiagent@<pi-ip-address> sudo reboot
+ssh pi@<pi-ip-address> sudo reboot
 ```
 
 On reboot:
 - **With ethernet**: Pi boots straight into kiosk → `screen.adspace.so`
 - **Without ethernet**: Pi boots into setup screen, hotspot `Adspace-TV-{serial}` appears
+
+### Step 5 — SSH via Tailscale (after reboot)
+With `--ssh` flag, Tailscale handles SSH auth. No keys needed — just be logged into Tailscale on your Mac:
+```bash
+# Install Tailscale on your Mac if you haven't: https://tailscale.com/download
+ssh pi@adspace-{serial}       # e.g. ssh pi@adspace-4d919699
+```
+
+All team members with Tailscale access to your network can SSH any Pi by name.
 
 ---
 

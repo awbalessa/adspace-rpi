@@ -2,49 +2,44 @@
 # =============================================================================
 # AdSpace RPi Provision Script
 # =============================================================================
-# Run ONCE on a fresh Raspberry Pi OS Lite 64-bit (Debian Trixie/Bookworm).
-# Safe to re-run — fully idempotent. Same input → same output, no side effects.
+# Turns a fresh Raspberry Pi OS Lite 64-bit into a fully configured AdSpace
+# digital signage device. Safe to re-run — fully idempotent.
 #
-# Pre-requisites:
-#   - RPi OS Lite 64-bit flashed via Raspberry Pi Imager
-#   - In Imager settings: SSH enabled, user pi created, ethernet connected
-#   - Internet access on the Pi
+# PRE-REQUISITES (do these before running):
+#   1. Flash SD card with Raspberry Pi Imager:
+#      - OS: Raspberry Pi OS Lite (64-bit)
+#      - In "OS Customisation" settings:
+#        * Set hostname: anything (provision.sh will rename it to adspace-{serial})
+#        * Username: pi
+#        * Password: (anything — only used for first SSH)
+#        * Enable SSH: yes (Use password authentication)
+#        * Do NOT configure WiFi here — leave blank
+#   2. Insert SD card, connect ethernet, power on
+#   3. Find Pi's IP: check your router, or `arp -a | grep -i rasp`
 #
-# Usage (from your Mac):
+# USAGE (from your Mac):
+#   # With Tailscale (recommended — enables permanent remote SSH):
+#   TAILSCALE_AUTH_KEY=tskey-auth-xxx \
+#     ssh pi@<ip> "sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" < provision.sh
+#
+#   # Without Tailscale key (installs but doesn't authenticate):
 #   ssh pi@<ip> "sudo bash -s" < provision.sh
 #
-# Tailscale auth key (required for remote SSH access):
-#   Get a reusable auth key from https://login.tailscale.com/admin/settings/keys
-#   Pass it as an environment variable:
+# Get a Tailscale auth key:
+#   https://login.tailscale.com/admin/settings/keys
+#   → Generate key → Reusable: YES, Ephemeral: NO
+#   One key works for all Pis.
 #
-#   TAILSCALE_AUTH_KEY=tskey-auth-xxx ssh pi@<ip> "sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" < provision.sh
+# AFTER PROVISIONING (run on your Mac):
+#   make deploy              # pushes frontend + API binary to Pi
+#   ssh pi@<ip> sudo reboot  # reboot into kiosk
 #
-#   If not provided, Tailscale is installed but NOT authenticated.
-#   You can authenticate manually later: sudo tailscale up --auth-key=tskey-auth-xxx
-#
-# What this does:
-#   1.  Creates 'adspace' user with correct groups
-#   2.  Creates 'aiagent' user with scoped sudoers for remote agent access
-#   3.  Installs deps: chromium, labwc, caddy, network-manager, unclutter, tailscale
-#   4.  Configures autologin for adspace on tty1
-#   5.  Writes /opt/adspace/{watchdog.sh,start-kiosk.sh,start-setup-display.sh,kiosk.env}
-#   6.  Writes labwc autostart
-#   7.  Writes Caddyfile
-#   8.  Installs systemd units: adspace-kiosk, adspace-watchdog, adspace-setup-api
-#   9.  Sets hostname to adspace-{cpu_serial}
-#   10. Creates adspace-hotspot nmcli profile
-#   11. Installs + authenticates Tailscale
-#
-# After running this script, deploy the frontend + API binary:
-#   make deploy        (from repo root on your Mac)
-#
-# Then reboot the Pi:
-#   ssh pi@<ip> sudo reboot
+# After reboot, SSH via Tailscale (no key needed — Tailscale handles auth):
+#   ssh pi@adspace-{serial}
 # =============================================================================
 
 set -euo pipefail
 
-# ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}==>${NC} $*"; }
 warn() { echo -e "${YELLOW}WARN${NC} $*"; }
@@ -52,17 +47,66 @@ die()  { echo -e "${RED}ERROR${NC} $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Run as root: sudo bash provision.sh"
 
-# ── 1. Create adspace user ────────────────────────────────────────────────────
+# ── 1. System packages ────────────────────────────────────────────────────────
+log "Installing packages..."
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    chromium \
+    rpi-chromium-mods \
+    labwc \
+    wlr-randr \
+    xwayland \
+    caddy \
+    network-manager \
+    unclutter \
+    unclutter-xfixes \
+    curl \
+    rsync \
+    dnsmasq-base
+
+# ── 2. NetworkManager: take full control of interfaces ────────────────────────
+log "Configuring NetworkManager..."
+cat > /etc/NetworkManager/NetworkManager.conf << 'EOF'
+[main]
+dns=dnsmasq
+plugins=keyfile
+
+[ifupdown]
+managed=true
+EOF
+
+systemctl enable --now NetworkManager
+
+# Disable conflicting network services
+for svc in dhcpcd wpa_supplicant ifupdown; do
+    systemctl disable "$svc" 2>/dev/null || true
+    systemctl stop    "$svc" 2>/dev/null || true
+done
+
+# ── 3. Display: force HDMI output at 1080p ────────────────────────────────────
+log "Configuring display output..."
+BOOT_CONFIG="/boot/firmware/config.txt"
+# Force HDMI on even with no display connected (required for headless/signage)
+grep -q 'hdmi_force_hotplug' "$BOOT_CONFIG" || cat >> "$BOOT_CONFIG" << 'EOF'
+
+# AdSpace: force HDMI output at 1080p60 regardless of display detection
+hdmi_force_hotplug=1
+hdmi_group=2
+hdmi_mode=82
+EOF
+
+# ── 4. Create adspace user ────────────────────────────────────────────────────
 log "Creating adspace user..."
 if ! id adspace &>/dev/null; then
     useradd -m -s /bin/bash adspace
 fi
-# Ensure correct group membership (idempotent)
-for grp in video render audio input plugdev; do
+# Full group membership matching RPi OS defaults for a display user
+for grp in adm dialout cdrom sudo audio video plugdev games users input \
+           render netdev spi i2c gpio; do
     getent group "$grp" &>/dev/null && usermod -aG "$grp" adspace
 done
 
-# ── 2. Create aiagent user (scoped remote management) ─────────────────────────
+# ── 5. Create aiagent user ────────────────────────────────────────────────────
 log "Creating aiagent user..."
 if ! id aiagent &>/dev/null; then
     useradd -m -s /bin/bash aiagent
@@ -71,14 +115,15 @@ mkdir -p /home/aiagent/.ssh
 chmod 700 /home/aiagent/.ssh
 chown aiagent:aiagent /home/aiagent/.ssh
 
-# Scoped sudoers — only what the agent actually needs
+# Scoped sudoers — only what remote management actually needs
 cat > /etc/sudoers.d/aiagent << 'EOF'
-# AdSpace AI agent — scoped remote management access
+# AdSpace AI agent — scoped remote management
 aiagent ALL=(ALL) NOPASSWD: \
     /usr/bin/systemctl start adspace-*, \
     /usr/bin/systemctl stop adspace-*, \
     /usr/bin/systemctl restart adspace-*, \
     /usr/bin/systemctl status adspace-*, \
+    /usr/bin/systemctl daemon-reload, \
     /usr/bin/journalctl, \
     /usr/bin/nmcli, \
     /bin/mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api, \
@@ -86,31 +131,11 @@ aiagent ALL=(ALL) NOPASSWD: \
     /usr/bin/tee /opt/adspace/watchdog.sh, \
     /usr/bin/tee /opt/adspace/start-kiosk.sh, \
     /usr/bin/tee /opt/adspace/start-setup-display.sh, \
-    /usr/bin/tee /opt/adspace/kiosk.env, \
-    /bin/systemctl daemon-reload
+    /usr/bin/tee /opt/adspace/kiosk.env
 EOF
 chmod 440 /etc/sudoers.d/aiagent
 
-# ── 3. Install dependencies ───────────────────────────────────────────────────
-log "Installing packages..."
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    chromium \
-    labwc \
-    caddy \
-    network-manager \
-    unclutter \
-    curl \
-    rsync
-
-# Ensure NetworkManager is running
-systemctl enable --now NetworkManager
-
-# Disable dhcpcd if present (conflicts with NetworkManager)
-systemctl disable dhcpcd 2>/dev/null || true
-systemctl stop dhcpcd 2>/dev/null || true
-
-# ── 4. Autologin adspace on tty1 ─────────────────────────────────────────────
+# ── 6. Autologin adspace on tty1 ─────────────────────────────────────────────
 log "Configuring tty1 autologin..."
 mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
@@ -119,11 +144,10 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin adspace --noclear %I $TERM
 EOF
 
-# ── 5. /opt/adspace scripts ───────────────────────────────────────────────────
+# ── 7. /opt/adspace scripts ───────────────────────────────────────────────────
 log "Writing /opt/adspace scripts..."
 mkdir -p /opt/adspace/wifi-setup/dist
 
-# watchdog.sh
 cat > /opt/adspace/watchdog.sh << 'WATCHDOG'
 #!/usr/bin/env bash
 # adspace-watchdog: drives kiosk ↔ setup transitions based on network state.
@@ -174,15 +198,12 @@ enter_setup() {
     SSID="Adspace-TV-${CPU_SERIAL}"
     PASSWORD="${CPU_SERIAL}"
 
-    # Scan while wlan0 is still a client (before hotspot takes over the interface)
     scan_networks
 
-    # Update hotspot profile with this device's unique SSID
     nmcli con modify adspace-hotspot \
         802-11-wireless.ssid "$SSID" \
         802-11-wireless-security.psk "$PASSWORD" 2>/dev/null || true
 
-    # Write config.json for the TV setup page to read
     cat > "$CONFIG_JSON" << JSONEOF
 {
   "hotspotSSID": "$SSID",
@@ -199,8 +220,6 @@ JSONEOF
 }
 
 try_reconnect() {
-    # Briefly drop hotspot so NetworkManager can attempt saved WiFi connections.
-    # wlan0 can't be AP and client simultaneously.
     log "Attempting reconnect to saved networks..."
     nmcli con down adspace-hotspot 2>/dev/null || true
     sleep 20
@@ -229,7 +248,6 @@ while true; do
             last_state="setup"
             setup_cycles=0
         else
-            # Every ~60s in setup mode, try reconnecting to previously saved networks
             setup_cycles=$((setup_cycles + 1))
             if [ "$setup_cycles" -ge 4 ]; then
                 setup_cycles=0
@@ -244,7 +262,6 @@ while true; do
 done
 WATCHDOG
 
-# start-kiosk.sh
 cat > /opt/adspace/start-kiosk.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -267,7 +284,6 @@ exec "$ADSPACE_BROWSER" \
   "$ADSPACE_URL"
 EOF
 
-# start-setup-display.sh
 cat > /opt/adspace/start-setup-display.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -290,7 +306,6 @@ exec chromium \
   "http://localhost/tv"
 EOF
 
-# kiosk.env
 cat > /opt/adspace/kiosk.env << 'EOF'
 ADSPACE_URL="https://screen.adspace.so"
 ADSPACE_BROWSER="chromium"
@@ -301,7 +316,7 @@ chmod +x /opt/adspace/watchdog.sh \
          /opt/adspace/start-setup-display.sh
 chown -R adspace:adspace /opt/adspace
 
-# ── 6. labwc autostart ────────────────────────────────────────────────────────
+# ── 8. labwc autostart ────────────────────────────────────────────────────────
 log "Writing labwc autostart..."
 mkdir -p /home/adspace/.config/labwc
 cat > /home/adspace/.config/labwc/autostart << 'EOF'
@@ -315,7 +330,7 @@ EOF
 chmod +x /home/adspace/.config/labwc/autostart
 chown -R adspace:adspace /home/adspace/.config
 
-# ── 7. Caddyfile ──────────────────────────────────────────────────────────────
+# ── 9. Caddyfile ──────────────────────────────────────────────────────────────
 log "Writing Caddyfile..."
 cat > /etc/caddy/Caddyfile << 'EOF'
 {
@@ -323,7 +338,7 @@ cat > /etc/caddy/Caddyfile << 'EOF'
 }
 
 :80 {
-    # Captive portal — redirect OS probes to setup page
+    # Captive portal — redirect OS WiFi probes to setup page
     handle /hotspot-detect.html        { redir http://192.168.4.1/ 302 }
     handle /library/test/success.html  { redir http://192.168.4.1/ 302 }
     handle /generate_204               { redir http://192.168.4.1/ 302 }
@@ -331,7 +346,7 @@ cat > /etc/caddy/Caddyfile << 'EOF'
     handle /connecttest.txt            { redir http://192.168.4.1/ 302 }
     handle /redirect                   { redir http://192.168.4.1/ 302 }
 
-    # API
+    # WiFi setup API
     handle /api/* {
         reverse_proxy localhost:3000
     }
@@ -343,7 +358,7 @@ cat > /etc/caddy/Caddyfile << 'EOF'
         file_server
     }
 
-    # React SPA
+    # React SPA (setup UI)
     handle {
         root * /opt/adspace/wifi-setup/dist
         try_files {path} /index.html
@@ -352,10 +367,10 @@ cat > /etc/caddy/Caddyfile << 'EOF'
 }
 EOF
 
-# Caddy is started by watchdog only — not on boot
+# Caddy started by watchdog only — not on boot
 systemctl disable caddy.service 2>/dev/null || true
 
-# ── 8. Systemd units ──────────────────────────────────────────────────────────
+# ── 10. Systemd units ─────────────────────────────────────────────────────────
 log "Installing systemd units..."
 
 cat > /etc/systemd/system/adspace-kiosk.service << 'EOF'
@@ -380,7 +395,6 @@ Environment=XDG_SESSION_TYPE=wayland
 Environment=WLR_RENDERER=gles2
 Environment=WLR_DRM_DEVICES=/dev/dri/card1
 
-# Wait for GPU device to be available before starting
 ExecStartPre=/bin/sh -c 'until [ -e /dev/dri/card1 ]; do sleep 0.5; done'
 ExecStart=/usr/bin/labwc
 
@@ -429,30 +443,27 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-
-# Only watchdog starts on boot — it controls everything else
 systemctl enable  adspace-watchdog.service
-systemctl enable  adspace-kiosk.service     # unit exists, but watchdog calls systemctl restart
-systemctl disable adspace-kiosk.service     # ... so don't auto-start independently
+systemctl enable  adspace-kiosk.service
+systemctl disable adspace-kiosk.service     # watchdog controls it, not boot
 systemctl disable adspace-setup-api.service 2>/dev/null || true
 
-# ── 9. Set hostname from CPU serial ─────────────────────────────────────────
-log "Setting hostname from CPU serial..."
+# ── 11. Hostname from CPU serial ──────────────────────────────────────────────
+log "Setting hostname..."
 CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
 NEW_HOSTNAME="adspace-${CPU_SERIAL}"
 OLD_HOSTNAME=$(hostname)
 if [ "$OLD_HOSTNAME" != "$NEW_HOSTNAME" ]; then
     hostnamectl set-hostname "$NEW_HOSTNAME"
     sed -i "s/127\.0\.1\.1\s.*$/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts 2>/dev/null || true
-    grep -q '127.0.1.1' /etc/hosts || echo "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
-    log "Hostname set to $NEW_HOSTNAME (was $OLD_HOSTNAME)"
+    grep -q '127.0.1.1' /etc/hosts || echo -e "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
+    log "Hostname: $OLD_HOSTNAME → $NEW_HOSTNAME"
 else
-    log "Hostname already $NEW_HOSTNAME — no change"
+    log "Hostname already $NEW_HOSTNAME"
 fi
 
-# ── 10. adspace-hotspot nmcli profile ────────────────────────────────────────
+# ── 12. adspace-hotspot nmcli profile ────────────────────────────────────────
 log "Creating adspace-hotspot nmcli profile..."
-# Delete and recreate — idempotent
 nmcli con delete adspace-hotspot 2>/dev/null || true
 nmcli con add \
     type wifi \
@@ -470,7 +481,7 @@ nmcli con add \
     ipv4.addresses 192.168.4.1/24 \
     ipv6.method disabled
 
-# ── 11. Tailscale ─────────────────────────────────────────────────────────────
+# ── 13. Tailscale ─────────────────────────────────────────────────────────────
 log "Installing Tailscale..."
 if ! command -v tailscale &>/dev/null; then
     curl -fsSL https://tailscale.com/install.sh | sh
@@ -481,37 +492,37 @@ fi
 systemctl enable --now tailscaled
 
 if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
-    log "Authenticating Tailscale..."
-    # --ssh enables Tailscale SSH as a fallback
-    # --hostname sets the device name in the Tailscale admin panel
-    CPU_SERIAL_TS=$(grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9)
+    log "Authenticating Tailscale as ${NEW_HOSTNAME}..."
     tailscale up \
         --auth-key="${TAILSCALE_AUTH_KEY}" \
-        --hostname="adspace-${CPU_SERIAL_TS}" \
+        --hostname="${NEW_HOSTNAME}" \
         --accept-routes \
         --ssh
-    log "Tailscale authenticated as adspace-${CPU_SERIAL_TS}"
+    log "Tailscale authenticated — SSH available at: ssh pi@${NEW_HOSTNAME}"
 else
     warn "TAILSCALE_AUTH_KEY not set — Tailscale installed but not authenticated."
-    warn "Authenticate manually: sudo tailscale up --auth-key=tskey-auth-xxx"
+    warn "To authenticate later:  sudo tailscale up --auth-key=tskey-auth-xxx"
 fi
 
+# ── Done ──────────────────────────────────────────────────────────────────────
 log ""
-log "────────────────────────────────────────────────────────"
+log "────────────────────────────────────────────────────────────────"
 log "✓  Provision complete!"
 log ""
-log "Hostname:  $(hostname)"
-if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
-    log "Tailscale: $(tailscale ip -4 2>/dev/null || echo 'not authenticated yet')"
+log "   Hostname:  ${NEW_HOSTNAME}"
+if command -v tailscale &>/dev/null; then
+    TS_IP=$(tailscale ip -4 2>/dev/null || echo "not authenticated yet")
+    log "   Tailscale: ${TS_IP}"
 fi
 log ""
-log "Next steps:"
-log "  1. Add your SSH key to aiagent:"
-log "     ssh-copy-id -i ~/.ssh/your-key.pub aiagent@<ip>"
-log "  2. Deploy the app from your Mac:"
-log "     make deploy"
-log "  3. Reboot:"
-log "     ssh pi@<ip> sudo reboot"
-log "  4. SSH via Tailscale after reboot:"
-log "     ssh aiagent@$(hostname)"
-log "────────────────────────────────────────────────────────"
+log "   Next — run on your Mac:"
+log ""
+log "   1. Deploy the app:"
+log "      make deploy"
+log ""
+log "   2. Reboot:"
+log "      ssh pi@$(hostname -I | awk '{print $1}') sudo reboot"
+log ""
+log "   3. After reboot, SSH via Tailscale (no key needed):"
+log "      ssh pi@${NEW_HOSTNAME}"
+log "────────────────────────────────────────────────────────────────"

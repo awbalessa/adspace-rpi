@@ -2,13 +2,16 @@
 # Builds and deploys both the frontend and Go API to the Pi.
 #
 # Targets:
-#   make deploy        — build + deploy everything
-#   make deploy-front  — frontend only
-#   make deploy-api    — Go API only
-#   make logs          — tail watchdog + kiosk logs on Pi
-#   make ssh           — open SSH session to Pi
+#   make deploy              — build + deploy everything
+#   make deploy-front        — frontend only
+#   make deploy-api          — Go API only
+#   make logs                — tail watchdog + kiosk logs on Pi
+#   make ssh                 — open SSH session to Pi
+#
+# Override target Pi (e.g. for a new device):
+#   make deploy PI_SSH=adspace@192.168.1.50
 
-PI_SSH    := aiagent@rpi5-4gb
+PI_SSH    ?= adspace@rpi5-4gb
 PI_KEY    := ~/.ssh/coding-agent
 SSH       := ssh -i $(PI_KEY) $(PI_SSH)
 SCP       := scp -i $(PI_KEY)
