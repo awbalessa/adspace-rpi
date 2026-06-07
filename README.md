@@ -6,15 +6,61 @@ This repo contains everything needed to turn a **Raspberry Pi 5** into an AdSpac
 
 ## Table of Contents
 
-1. [How it works](#how-it-works)
-2. [Repository layout](#repository-layout)
-3. [Pi file layout](#pi-file-layout)
-4. [Quick start — provisioning a new Pi](#quick-start--provisioning-a-new-pi)
-5. [Day-to-day development](#day-to-day-development)
-6. [Connecting to the Pi](#connecting-to-the-pi)
-7. [Debugging](#debugging)
-8. [Golden image (fleet provisioning)](#golden-image-fleet-provisioning)
-9. [Architecture decisions](#architecture-decisions)
+1. [Onboarding — new developer setup](#onboarding--new-developer-setup)
+2. [How it works](#how-it-works)
+3. [Repository layout](#repository-layout)
+4. [Pi file layout](#pi-file-layout)
+5. [Quick start — provisioning a new Pi](#quick-start--provisioning-a-new-pi)
+6. [Day-to-day development](#day-to-day-development)
+7. [Connecting to the Pi](#connecting-to-the-pi)
+8. [Debugging](#debugging)
+9. [Golden image (fleet provisioning)](#golden-image-fleet-provisioning)
+10. [Architecture decisions](#architecture-decisions)
+
+---
+
+## Onboarding — new developer setup
+
+Do this once when you join the team. Takes about 5 minutes.
+
+### 1. Join Tailscale
+Tailscale is how you SSH into any Pi from anywhere — no VPN config, no IP addresses, just device names.
+
+- Go to [tailscale.com](https://tailscale.com)
+- Click **Log in** → **Continue with Google**
+- Sign in with **dev@adspace.so**
+- Download and install the Tailscale app for your Mac: [tailscale.com/download](https://tailscale.com/download/mac)
+- Open the app, sign in with the same Google account
+- You're now on the AdSpace network — all Pis are immediately reachable by name
+
+### 2. Generate your personal Tailscale auth key
+You need this to provision new Pis. Each dev has their own key.
+
+- Go to [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys)
+- Click **Generate auth key**
+- Settings:
+  - **Description**: your name / machine (e.g. `aziz-macbook`)
+  - **Reusable**: ON — one key provisions all your Pis
+  - **Ephemeral**: OFF — devices must persist after going offline
+  - **Tags**: ON → `tag:adspace-pi` — disables node key expiry so Pis stay on Tailscale forever
+- Click **Generate key**, copy it
+
+### 3. Add your key to `.env`
+```bash
+cd rpi/
+cp .env.example .env
+# Open .env and paste your key:
+# TAILSCALE_AUTH_KEY=tskey-auth-xxx
+```
+
+`.env` is gitignored — never committed.
+
+### 4. Install dev tools
+```bash
+brew install go pnpm
+```
+
+That's it. You can now SSH into any Pi and provision new ones.
 
 ---
 
