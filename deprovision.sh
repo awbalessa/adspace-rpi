@@ -61,7 +61,10 @@ rm -f /tmp/adspace-setup-mode
 rm -f /tmp/adspace-wifi-scan.json
 
 log "Removing sudoers..."
-rm -f /etc/sudoers.d/ai-agent /etc/sudoers.d/aiagent 2>/dev/null || true
+rm -f /etc/sudoers.d/aiagent /etc/sudoers.d/ai-agent 2>/dev/null || true
+
+log "Removing aiagent user..."
+userdel -r aiagent 2>/dev/null || warn "aiagent user not found or already removed"
 
 log "Removing adspace user..."
 userdel -r adspace 2>/dev/null || warn "adspace user not found or already removed"

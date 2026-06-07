@@ -53,13 +53,23 @@ Host rpi-ai
     User pi
 ```
 
-**For the AI agent specifically:** the agent uses the `pi` user with scoped sudo. Configure it to SSH as:
+**Two users, two purposes:**
+- `pi` — humans, full sudo, used for deploys and manual work
+- `aiagent` — AI agent only, scoped sudo, only what remote dev needs
+
+**AI agent SSHes as `aiagent`:**
 ```bash
-ssh pi@adspace-4d919699
-# or via the rpi-ai alias if ~/.ssh/config is set up
+ssh rpi-ai                                        # via ~/.ssh/config alias
+ssh -i ~/.ssh/ai-agent aiagent@adspace-4d919699  # explicit
 ```
 
-### What `pi` can sudo
+**Humans SSH as `pi`:**
+```bash
+ssh rpi-pi                   # dev Pi
+ssh pi@adspace-xxxxxxxx      # any Pi by Tailscale name
+```
+
+### What `aiagent` can sudo
 Defined in `/etc/sudoers.d/aiagent` — scoped to exactly what's needed:
 
 | Command | Purpose |

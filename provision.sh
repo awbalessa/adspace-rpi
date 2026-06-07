@@ -107,12 +107,40 @@ for grp in adm dialout cdrom sudo audio video plugdev games users input \
 done
 
 # ── 5. Ensure pi user has passwordless sudo ──────────────────────────────────
-# pi user already exists on RPi OS Lite — just ensure NOPASSWD sudo is set
+# pi already exists on RPi OS Lite — just ensure NOPASSWD sudo is set
 log "Configuring pi user sudo..."
 if ! grep -q 'pi ALL=(ALL) NOPASSWD:ALL' /etc/sudoers.d/010_pi-nopasswd 2>/dev/null; then
     echo 'pi ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/010_pi-nopasswd
     chmod 440 /etc/sudoers.d/010_pi-nopasswd
 fi
+
+# ── 6. Create aiagent user (AI coding agent — scoped sudo) ────────────────────
+# Separate from pi — agent gets only the commands it actually needs
+log "Creating aiagent user..."
+if ! id aiagent &>/dev/null; then
+    useradd -m -s /bin/bash aiagent
+fi
+mkdir -p /home/aiagent/.ssh
+chmod 700 /home/aiagent/.ssh
+chown aiagent:aiagent /home/aiagent/.ssh
+
+cat > /etc/sudoers.d/aiagent << 'EOF'
+# AI coding agent — scoped to exactly what remote dev work needs
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/systemctl start adspace-*
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop adspace-*
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart adspace-*
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/systemctl status adspace-*
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/systemctl daemon-reload
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/journalctl
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/nmcli
+aiagent ALL=(ALL) NOPASSWD: /bin/mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api
+aiagent ALL=(ALL) NOPASSWD: /bin/chmod +x /opt/adspace/wifi-setup-api
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/tee /opt/adspace/watchdog.sh
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/tee /opt/adspace/start-kiosk.sh
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/tee /opt/adspace/start-setup-display.sh
+aiagent ALL=(ALL) NOPASSWD: /usr/bin/tee /opt/adspace/kiosk.env
+EOF
+chmod 440 /etc/sudoers.d/aiagent
 
 # ── 6. Autologin adspace on tty1 ─────────────────────────────────────────────
 log "Configuring tty1 autologin..."
