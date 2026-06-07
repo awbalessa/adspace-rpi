@@ -1,0 +1,325 @@
+/* ── Phone page ───────────────────────────────────────────────────── */
+
+.page {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--surface);
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px 24px;
+}
+
+.card-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.card-logo span {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.card h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.card > p {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+form {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.field select,
+.field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  appearance: none;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.field select:focus,
+.field input:focus {
+  border-color: var(--blue);
+}
+
+.field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+  cursor: pointer;
+}
+
+.password-wrap {
+  position: relative;
+}
+
+.password-wrap input {
+  padding-right: 44px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.password-toggle:hover {
+  color: var(--text);
+}
+
+.btn-primary {
+  width: 100%;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 4px;
+}
+
+.btn-primary:hover {
+  background: var(--blue-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 6px 0 0;
+  font-size: 13px;
+  color: var(--blue);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+.status {
+  margin-top: 16px;
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.status.error {
+  background: #fef2f2;
+  color: var(--red);
+}
+
+.status.success {
+  background: var(--blue-light);
+  color: var(--blue);
+}
+
+.networks-loading {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 10px 0 0;
+}
+
+/* ── TV page ──────────────────────────────────────────────────────── */
+
+.tv-page {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px;
+  background: var(--bg);
+  gap: 52px;
+  position: relative;
+}
+
+.tv-logo {
+  position: absolute;
+  top: 48px;
+  left: 56px;
+  width: 200px;
+  height: auto;
+  display: block;
+}
+
+.tv-header {
+  text-align: center;
+  max-width: 800px;
+}
+
+.tv-step {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin: 0 0 16px;
+}
+
+.tv-page h1 {
+  font-size: 52px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  margin: 0 0 16px;
+  color: var(--text);
+}
+
+.tv-subtitle {
+  font-size: 22px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.tv-grid {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.tv-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  min-width: 340px;
+}
+
+.tv-card-primary {
+  background: var(--blue-light);
+  border-color: #bfdbfe;
+  align-items: center;
+  text-align: center;
+}
+
+.tv-card-step {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin: 0 0 8px;
+}
+
+.tv-card-label {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 24px;
+}
+
+.tv-qr-wrap {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.tv-card-hint {
+  font-size: 16px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.tv-credential {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 28px;
+}
+
+.tv-credential-label {
+  font-size: 15px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.tv-credential-value {
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.tv-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0 28px;
+}
+
+.tv-fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.tv-fallback-row .tv-credential-value {
+  font-size: 22px;
+  letter-spacing: 0;
+}

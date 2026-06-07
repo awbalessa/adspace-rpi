@@ -1,0 +1,14 @@
+# Build artefacts
+wifi-setup/dist/
+wifi-setup/node_modules/
+wifi-setup/.vite/
+wifi-setup-api/wifi-setup-api
+
+# Runtime-only — Pi writes this at boot, never committed
+wifi-setup/public/config.json
+wifi-setup/dist/config.json
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
