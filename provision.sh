@@ -253,15 +253,26 @@ try_reconnect() {
 
 last_state=""
 setup_cycles=0
+fail_count=0
 
 while true; do
     if is_connected; then
+        fail_count=0
         if [ "$last_state" != "kiosk" ]; then
             enter_kiosk
             last_state="kiosk"
             setup_cycles=0
         fi
     else
+        fail_count=$((fail_count + 1))
+        # Require 2 consecutive failed checks (~30s) before entering setup mode.
+        # Prevents a momentary NM connectivity probe failure from triggering
+        # a full setup mode transition.
+        if [ "$fail_count" -lt 2 ]; then
+            sleep 15
+            continue
+        fi
+        fail_count=0
         if [ "$last_state" != "setup" ]; then
             enter_setup
             last_state="setup"
