@@ -102,9 +102,14 @@ func wifiHandler(w http.ResponseWriter, r *http.Request) {
 			args = append(args, "password", body.Password)
 		}
 
-		if _, err := runTimeout(30*time.Second, args...); err != nil {
-			log.Printf("WiFi connect failed for %q: %v — restoring hotspot", body.SSID, err)
-			exec.Command("sudo", "nmcli", "con", "up", "adspace-hotspot").Run()
+		out, err := runTimeout(30*time.Second, args...)
+		if err != nil {
+			log.Printf("WiFi connect failed for %q: out=%q err=%v — restoring hotspot", body.SSID, out, err)
+			// Restore hotspot via nohup so it survives if systemd kills this process
+			// before the restore completes (e.g. watchdog detects ethernet reconnect
+			// and stops the API mid-goroutine).
+			restoreCmd := exec.Command("sudo", "nohup", "nmcli", "con", "up", "adspace-hotspot")
+			restoreCmd.Start()
 			return
 		}
 
