@@ -8,9 +8,12 @@ WIFI_SCAN_CACHE="/tmp/adspace-wifi-scan.json"
 log() { echo "adspace-watchdog: $*"; logger -t adspace-watchdog "$*"; }
 
 is_connected() {
-    nmcli -t -f NAME,TYPE,STATE con show --active 2>/dev/null \
-        | grep -v "^adspace-hotspot:" \
-        | grep -qE ":(802-3-ethernet|802-11-wireless):activated$"
+    # Check NM's connectivity state — 'full' means actual internet, not just a profile activated.
+    # The old approach (checking activated profiles) fails because NM keeps ethernet profiles
+    # in 'activated' state even after the cable is unplugged, causing false positives.
+    local state
+    state=$(nmcli networking connectivity 2>/dev/null)
+    [ "$state" = "full" ]
 }
 
 scan_networks() {
@@ -30,21 +33,6 @@ scan_networks() {
     log "Scan complete: $(cat $WIFI_SCAN_CACHE)"
 }
 
-restart_display() {
-    # Kill children first so labwc isn't holding GPU resources when it exits
-    pkill -x chromium 2>/dev/null || true
-    pkill -f start-kiosk.sh 2>/dev/null || true
-    pkill -f start-setup-display.sh 2>/dev/null || true
-    pkill -x unclutter 2>/dev/null || true
-    # Wait for chromium GPU process to fully release DRM/GPU resources
-    sleep 5
-    # Kill labwc by PID from the service cgroup — handles (labwc) zombie name
-    LABWC_PID=$(systemctl show adspace-kiosk.service -p MainPID --value 2>/dev/null || echo "")
-    if [ -n "$LABWC_PID" ] && [ "$LABWC_PID" != "0" ]; then
-        kill -TERM "$LABWC_PID" 2>/dev/null || kill -KILL "$LABWC_PID" 2>/dev/null || true
-    fi
-}
-
 enter_kiosk() {
     log "Network up → kiosk mode"
     rm -f "$SETUP_FLAG"
@@ -52,7 +40,7 @@ enter_kiosk() {
     systemctl stop caddy.service || true
     systemctl stop adspace-setup-api.service || true
     nmcli con down adspace-hotspot 2>/dev/null || true
-    restart_display
+    systemctl restart adspace-kiosk.service
 }
 
 enter_setup() {
@@ -79,11 +67,10 @@ JSONEOF
     nmcli con up adspace-hotspot
     systemctl start adspace-setup-api.service
     systemctl start caddy.service
-    restart_display
+    systemctl restart adspace-kiosk.service
 }
 
 try_reconnect() {
-    # Briefly bring hotspot down to let NM try saved WiFi networks
     log "Trying to reconnect to saved networks..."
     nmcli con down adspace-hotspot 2>/dev/null || true
     sleep 20

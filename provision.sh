@@ -175,9 +175,12 @@ WIFI_SCAN_CACHE="/tmp/adspace-wifi-scan.json"
 log() { echo "adspace-watchdog: $*"; logger -t adspace-watchdog "$*"; }
 
 is_connected() {
-    nmcli -t -f NAME,TYPE,STATE con show --active 2>/dev/null \
-        | grep -v "^adspace-hotspot:" \
-        | grep -qE ":(802-3-ethernet|802-11-wireless):activated$"
+    # Check NM's connectivity state — 'full' means actual internet, not just a profile activated.
+    # The old approach (checking activated profiles) fails because NM keeps ethernet profiles
+    # in 'activated' state even after the cable is unplugged, causing false positives.
+    local state
+    state=$(nmcli networking connectivity 2>/dev/null)
+    [ "$state" = "full" ]
 }
 
 scan_networks() {
