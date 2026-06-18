@@ -8,13 +8,14 @@
 #   make deploy-front PI_SSH=pi@adspace-{serial}        — frontend only
 #   make deploy-api PI_SSH=pi@adspace-{serial}          — API binary only
 #   make logs PI_SSH=pi@adspace-{serial}                — tail all logs
+#   make screenshot PI_SSH=pi@adspace-{serial}          — grab current screen → /tmp/adspace-screen.png
 #   make ssh PI_SSH=pi@adspace-{serial}                 — open shell
 
 PI_SSH    ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
 SSH       := ssh $(PI_SSH)
 SCP       := scp
 
-.PHONY: flash deploy deploy-front deploy-api logs ssh
+.PHONY: flash deploy deploy-front deploy-api logs screenshot ssh
 
 # ── Full flash (provision + deploy + reboot) ──────────────────────────
 flash:
@@ -38,6 +39,12 @@ deploy-api:
 
 logs:
 	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -f"
+
+screenshot:
+	$(SSH) "sudo -u adspace sh -c 'WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001 grim /tmp/adspace-screen.png'"
+	scp $(PI_SSH):/tmp/adspace-screen.png /tmp/adspace-screen.png
+	@echo "Saved to /tmp/adspace-screen.png"
+	open /tmp/adspace-screen.png
 
 ssh:
 	$(SSH)

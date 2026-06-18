@@ -53,7 +53,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     unclutter-xfixes \
     curl \
     rsync \
-    dnsmasq-base
+    dnsmasq-base \
+    grim
 
 # cage requires libwlroots-0.18 (RPi build) — pin it before installing cage
 # libwlroots-0.19 (used by labwc 0.9.7) causes SEGV on mode switch on Pi 5
