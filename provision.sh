@@ -207,7 +207,10 @@ enter_kiosk() {
     systemctl stop caddy.service || true
     systemctl stop adspace-setup-api.service || true
     nmcli con down adspace-hotspot 2>/dev/null || true
-    systemctl restart adspace-kiosk.service
+    # Only restart kiosk if it's not already running cleanly in kiosk mode
+    if ! systemctl is-active --quiet adspace-kiosk.service; then
+        systemctl restart adspace-kiosk.service
+    fi
 }
 
 enter_setup() {
@@ -431,6 +434,8 @@ cat > /etc/systemd/system/adspace-kiosk.service << 'EOF'
 Description=AdSpace Wayland Kiosk
 After=systemd-user-sessions.service dev-dri-card1.device
 Wants=dev-dri-card1.device
+Conflicts=getty@tty1.service
+After=getty@tty1.service
 
 [Service]
 User=adspace
@@ -450,7 +455,7 @@ Environment=WLR_DRM_DEVICES=/dev/dri/card1
 
 ExecStartPre=/bin/sh -c 'until [ -e /dev/dri/card1 ]; do sleep 0.5; done'
 ExecStartPre=/bin/sh -c 'uid=$(id -u adspace); mkdir -p /run/user/$uid; chmod 700 /run/user/$uid; chown adspace:adspace /run/user/$uid; rm -f /run/user/$uid/wayland-*'
-ExecStartPre=/bin/sh -c 'pkill -u adspace chromium 2>/dev/null; sleep 1; pkill -9 -u adspace chromium 2>/dev/null; rm -f /home/adspace/.config/adspace-chromium/SingletonLock /home/adspace/.config/adspace-setup-chromium/SingletonLock; true'
+ExecStartPre=/bin/sh -c 'rm -f /home/adspace/.config/adspace-chromium/SingletonLock /home/adspace/.config/adspace-setup-chromium/SingletonLock'
 ExecStart=/usr/bin/cage -s -- /opt/adspace/start-display.sh
 
 KillMode=control-group

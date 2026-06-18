@@ -40,7 +40,10 @@ enter_kiosk() {
     systemctl stop caddy.service || true
     systemctl stop adspace-setup-api.service || true
     nmcli con down adspace-hotspot 2>/dev/null || true
-    systemctl restart adspace-kiosk.service
+    # Only restart kiosk if it's not already running cleanly in kiosk mode
+    if ! systemctl is-active --quiet adspace-kiosk.service; then
+        systemctl restart adspace-kiosk.service
+    fi
 }
 
 enter_setup() {
