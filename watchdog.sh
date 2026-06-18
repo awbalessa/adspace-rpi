@@ -30,6 +30,21 @@ scan_networks() {
     log "Scan complete: $(cat $WIFI_SCAN_CACHE)"
 }
 
+restart_display() {
+    # Kill children first so labwc isn't holding GPU resources when it exits
+    pkill -x chromium 2>/dev/null || true
+    pkill -f start-kiosk.sh 2>/dev/null || true
+    pkill -f start-setup-display.sh 2>/dev/null || true
+    pkill -x unclutter 2>/dev/null || true
+    # Wait for chromium GPU process to fully release DRM/GPU resources
+    sleep 5
+    # Kill labwc by PID from the service cgroup — handles (labwc) zombie name
+    LABWC_PID=$(systemctl show adspace-kiosk.service -p MainPID --value 2>/dev/null || echo "")
+    if [ -n "$LABWC_PID" ] && [ "$LABWC_PID" != "0" ]; then
+        kill -TERM "$LABWC_PID" 2>/dev/null || kill -KILL "$LABWC_PID" 2>/dev/null || true
+    fi
+}
+
 enter_kiosk() {
     log "Network up → kiosk mode"
     rm -f "$SETUP_FLAG"
@@ -37,7 +52,7 @@ enter_kiosk() {
     systemctl stop caddy.service || true
     systemctl stop adspace-setup-api.service || true
     nmcli con down adspace-hotspot 2>/dev/null || true
-    systemctl restart adspace-kiosk.service
+    restart_display
 }
 
 enter_setup() {
@@ -64,7 +79,7 @@ JSONEOF
     nmcli con up adspace-hotspot
     systemctl start adspace-setup-api.service
     systemctl start caddy.service
-    systemctl restart adspace-kiosk.service
+    restart_display
 }
 
 try_reconnect() {

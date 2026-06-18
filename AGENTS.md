@@ -7,7 +7,7 @@ Read it before making any changes. Follow the constraints — they exist because
 
 ## What this system is
 
-A Raspberry Pi 5 that runs a digital signage kiosk (`https://screen.adspace.so`) when it has WiFi, and displays a setup page + WiFi hotspot when it doesn't. A technician connects their phone to the hotspot, submits WiFi credentials via a web form, and the Pi connects and boots into kiosk mode automatically.
+A Raspberry Pi 5 that runs a digital signage kiosk (`https://screen.adspace.so`) when it has network, and displays a setup page + WiFi hotspot when it doesn't. A technician connects their phone to the hotspot, submits WiFi credentials via a web form, and the Pi connects and boots into kiosk mode automatically.
 
 One always-on systemd service (`adspace-watchdog`) drives all state transitions. Everything else is started or stopped by the watchdog.
 
@@ -35,7 +35,7 @@ SSH to Pis goes through **Tailscale** — no keys to manage. See the README onbo
 
 1. Sign into Tailscale at [tailscale.com](https://tailscale.com) using **dev@adspace.so** (Continue with Google)
 2. Install the Tailscale Mac app
-3. SSH directly by device name: `ssh pi@adspace-4d919699`
+3. SSH directly by device name: `ssh pi@adspace-{serial}`
 
 **Tailscale handles auth** — if you're logged into the AdSpace Tailscale account you can SSH any Pi, no key file needed.
 
@@ -46,44 +46,24 @@ Host adspace-*
     User pi
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
-
-# Dev Pi shortcut
-Host rpi-ai
-    HostName adspace-4d919699
-    User pi
 ```
 
 **Two users, two purposes:**
 - `pi` — humans, full sudo, used for deploys and manual work
-- `aiagent` — AI agent only, scoped sudo, only what remote dev needs
+- `aiagent` — AI agent only, full passwordless sudo, SSH key auth
 
 **AI agent SSHes as `aiagent`:**
 ```bash
-ssh rpi-ai                                        # via ~/.ssh/config alias
-ssh -i ~/.ssh/ai-agent aiagent@adspace-4d919699  # explicit
+ssh -i ~/.ssh/ai-agent aiagent@adspace-{serial}
 ```
 
 **Humans SSH as `pi`:**
 ```bash
-ssh rpi-pi                   # dev Pi
-ssh pi@adspace-xxxxxxxx      # any Pi by Tailscale name
+ssh pi@adspace-{serial}      # any Pi by Tailscale name
 ```
 
 ### What `aiagent` can sudo
-Defined in `/etc/sudoers.d/aiagent` — scoped to exactly what's needed:
-
-| Command | Purpose |
-|---------|--------|
-| `systemctl start/stop/restart/status adspace-*` | Control adspace services |
-| `journalctl` | Read logs |
-| `nmcli` | Inspect network state |
-| `mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api` | Deploy API binary |
-| `chmod +x /opt/adspace/wifi-setup-api` | Make binary executable |
-| `tee /opt/adspace/*.sh` | Update scripts |
-| `tee /opt/adspace/kiosk.env` | Update kiosk config |
-| `systemctl daemon-reload` | Pick up unit file changes |
-
-**Cannot**: install packages, modify systemd unit files, create users, access other users' home dirs, run arbitrary commands as root. If you need something outside this scope, ask a human to run it manually or expand sudoers via `provision.sh`.
+`aiagent` has `NOPASSWD: ALL` — full passwordless sudo. This is intentional for unattended remote dev and diagnostics over SSH. The user is locked to key-only SSH auth (no password login).
 
 ---
 
@@ -91,33 +71,31 @@ Defined in `/etc/sudoers.d/aiagent` — scoped to exactly what's needed:
 
 ### Frontend (React)
 ```bash
-cd wifi-setup && make deploy
-# Runs: pnpm build → rsync dist/ to adspace@rpi5-4gb:/opt/adspace/wifi-setup/dist
+cd wifi-setup && make deploy PI_SSH=pi@adspace-{serial}
+# Runs: pnpm build → rsync dist/ to Pi:/opt/adspace/wifi-setup/dist
 # IMPORTANT: rsync uses --delete (removes old bundles) and --exclude='config.json'
 ```
 
 ### Go API binary
 ```bash
 # From repo root:
-make deploy-api
+make deploy-api PI_SSH=pi@adspace-{serial}
 
 # Or manually:
 cd wifi-setup-api
 GOOS=linux GOARCH=arm64 go build -o wifi-setup-api .
-scp -i ~/.ssh/coding-agent wifi-setup-api pi@rpi5-4gb:/tmp/wifi-setup-api-new
-ssh rpi-ai "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
+scp wifi-setup-api pi@adspace-{serial}:/tmp/wifi-setup-api-new
+ssh pi@adspace-{serial} "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
+         && sudo chown adspace:adspace /opt/adspace/wifi-setup-api \
          && sudo chmod +x /opt/adspace/wifi-setup-api \
          && sudo systemctl restart adspace-setup-api.service"
 ```
 
-> **Never** use `adspace@rpi5-4gb` for deployment — that user requires password sudo.
-> Always use `pi@rpi5-4gb` with the SSH key.
-
 ### Watchdog / shell scripts
 Edit locally, then push to Pi:
 ```bash
-ssh rpi-ai "sudo tee /opt/adspace/watchdog.sh" < watchdog.sh
-ssh rpi-ai "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemctl restart adspace-watchdog"
+ssh pi@adspace-{serial} "sudo tee /opt/adspace/watchdog.sh" < watchdog.sh
+ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemctl restart adspace-watchdog"
 ```
 
 ---
@@ -150,13 +128,12 @@ exec.Command("sudo", "nmcli", "con", "delete", body.SSID).Run()
 before connecting. Do not remove this.
 
 ### 4. Hotspot must come down before WiFi connect
-```go
-exec.Command("sudo", "nmcli", "con", "down", "adspace-hotspot").Run()
-time.Sleep(2 * time.Second)
-```
-This is required — wlan0 can't be AP and client at the same time. API restores hotspot if connect fails.
+The API brings the hotspot down in a background goroutine after immediately returning `{"ok": true}` to the phone. wlan0 cannot be AP and client at the same time. The hotspot is restored if connect fails.
 
-### 5. Use CPU serial, not machine-id, for SSID
+### 5. POST /api/wifi is optimistic
+The API returns `{"ok": true}` immediately — before the connect attempt completes. This is required because the phone loses its network connection when the hotspot drops. The actual connect runs in a background goroutine with a 30s timeout. If it fails, the hotspot is restored. The screen switching to kiosk mode is the real success confirmation.
+
+### 6. Use CPU serial, not machine-id, for SSID
 `/etc/machine-id` is cloned identically when SD cards are copied for new Pis.
 CPU serial is hardware-burned and unique per board:
 ```bash
@@ -164,19 +141,31 @@ grep Serial /proc/cpuinfo | awk '{print $3}' | tail -c 9
 ```
 The watchdog uses this for `Adspace-TV-{cpu_serial}`.
 
-### 6. Separate Chromium profiles
+### 7. Separate Chromium profiles
 - Kiosk: `--user-data-dir=/home/adspace/.config/adspace-chromium`
 - Setup: `--user-data-dir=/home/adspace/.config/adspace-setup-chromium --disk-cache-size=1`
 
 Never merge these. Stale kiosk bundles bled into setup mode — this was a real bug.
 
-### 7. Old JS bundles accumulate and break things
+### 8. Old JS bundles accumulate and break things
 `rsync --delete` in `wifi-setup/Makefile` ensures stale bundles are removed on every deploy.
 Do not remove the `--delete` flag.
 
-### 8. adspace-kiosk.service has Restart=always but is boot-disabled
+### 9. adspace-kiosk.service has Restart=always but is boot-disabled
 The watchdog calls `systemctl restart adspace-kiosk` explicitly.
-If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself before watchdog is ready, causing race conditions. It's enabled (unit exists) but boot-disabled (not in WantedBy targets).
+If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself before watchdog is ready, causing race conditions. It is boot-disabled intentionally — watchdog controls it.
+
+### 10. Kill chromium before each cage start
+`ExecStartPre` in `adspace-kiosk.service` kills all `adspace`-owned chromium processes before cage starts. Without this, the new chromium detects the old session's SingletonLock, hands off the URL to the still-running process, and exits immediately — cage exits too — systemd restarts — crash loop.
+
+### 11. Call chromium binary directly, not the wrapper
+Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash.
+
+### 12. cage requires libwlroots-0.18 (RPi build)
+Must use `libwlroots-0.18=0.18.2-3+rpt4+b1` (RPi build). The Debian build of wlroots-0.18 fails with `EGL_BAD_PARAMETER` on Pi 5 GPU. libwlroots-0.19 (used by labwc) causes SEGV on mode switch. Both can coexist but cage must link against 0.18.
+
+### 13. cage requires /etc/pam.d/cage
+cage needs its own PAM stack. `PAMName=cage` in the service unit points to `/etc/pam.d/cage`. Without it, cage exits with code 21 (ENODEV).
 
 ---
 
@@ -185,16 +174,15 @@ If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself bef
 | Path | Purpose |
 |------|---------|
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
-| `/opt/adspace/start-kiosk.sh` | Launched by labwc autostart in kiosk mode |
-| `/opt/adspace/start-setup-display.sh` | Launched by labwc autostart in setup mode |
-| `/opt/adspace/kiosk.env` | `ADSPACE_URL` and `ADSPACE_BROWSER` env vars |
+| `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
+| `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var |
 | `/opt/adspace/wifi-setup-api` | Compiled Go binary, served on :3000 |
 | `/opt/adspace/wifi-setup/dist/` | Built React app, served by Caddy on :80 |
 | `/opt/adspace/wifi-setup/dist/config.json` | Runtime-written by watchdog — never deploy |
-| `/home/adspace/.config/labwc/autostart` | Branches on setup flag, launches correct Chromium |
 | `/etc/caddy/Caddyfile` | Serves :80, proxies /api/*, captive portal redirects |
+| `/etc/pam.d/cage` | Required PAM stack for cage compositor |
 | `/etc/systemd/system/adspace-watchdog.service` | Starts on boot |
-| `/etc/systemd/system/adspace-kiosk.service` | labwc session on tty1, boot-disabled |
+| `/etc/systemd/system/adspace-kiosk.service` | cage Wayland session on tty1, boot-disabled |
 | `/etc/systemd/system/adspace-setup-api.service` | Go API, started by watchdog only |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
@@ -236,15 +224,15 @@ If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself bef
 ```
 systemd boot
     └── adspace-watchdog.service (starts on boot)
-            ├── adspace-kiosk.service   (watchdog: systemctl restart)
+            ├── adspace-kiosk.service     (watchdog: systemctl restart)
             ├── adspace-setup-api.service (watchdog: systemctl start/stop)
-            └── caddy.service           (watchdog: systemctl start/stop)
+            └── caddy.service             (watchdog: systemctl start/stop)
 
 adspace-kiosk.service
-    └── labwc (Wayland compositor)
-            └── /home/adspace/.config/labwc/autostart
-                    ├── [setup mode]  → start-setup-display.sh → chromium → http://localhost/tv
-                    └── [kiosk mode]  → start-kiosk.sh         → chromium → https://screen.adspace.so
+    └── cage (Wayland compositor, PAMName=cage)
+            └── /opt/adspace/start-display.sh
+                    ├── [setup mode]  → chromium → http://localhost/tv
+                    └── [kiosk mode]  → chromium → https://screen.adspace.so
 ```
 
 ---
@@ -261,19 +249,15 @@ Returns cached WiFi scan from before hotspot started.
 Returns `{ "networks": [] }` if no cache exists.
 
 ### `POST /api/wifi`
-Connect to a WiFi network. Tears down hotspot first.
+Initiates WiFi connection. Returns immediately — connect happens in background.
 ```json
 // Request
 { "ssid": "Office WiFi", "password": "hunter2" }
 
-// Success (200)
+// Always returns 200 immediately
 { "ok": true }
-
-// Error (400)
-{ "error": "could not connect to network" }
 ```
-On success: watchdog detects network within 15s → enters kiosk mode.
-On error: hotspot is restored so phone can retry.
+The API returns before the connection attempt completes. Success = screen switches to kiosk within ~15s. Failure = hotspot reappears within ~35s so the technician can retry.
 
 ---
 
@@ -281,35 +265,35 @@ On error: hotspot is restored so phone can retry.
 
 ### Check current mode
 ```bash
-ssh rpi-ai "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KIOSK"
+ssh pi@adspace-{serial} "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KIOSK"
 ```
 
 ### Watch everything live
 ```bash
-make logs
+make logs PI_SSH=pi@adspace-{serial}
 # or:
-ssh rpi-ai "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -f"
 ```
 
 ### Force into setup mode (for testing)
 ```bash
-ssh rpi-ai "sudo nmcli con delete 'NetworkName' && sudo systemctl restart adspace-watchdog"
+ssh pi@adspace-{serial} "sudo nmcli con delete 'NetworkName' && sudo systemctl restart adspace-watchdog"
 ```
 
 ### Force into kiosk mode
 ```bash
-ssh rpi-ai "sudo rm -f /tmp/adspace-setup-mode && sudo systemctl restart adspace-watchdog"
+ssh pi@adspace-{serial} "sudo rm -f /tmp/adspace-setup-mode && sudo systemctl restart adspace-watchdog"
 ```
 
 ### Check WiFi scan cache
 ```bash
-ssh rpi-ai "cat /tmp/adspace-wifi-scan.json"
+ssh pi@adspace-{serial} "cat /tmp/adspace-wifi-scan.json"
 ```
 
 ### Check what nmcli knows
 ```bash
-ssh rpi-ai "sudo nmcli con show"
-ssh rpi-ai "sudo nmcli con show --active"
+ssh pi@adspace-{serial} "sudo nmcli con show"
+ssh pi@adspace-{serial} "sudo nmcli con show --active"
 ```
 
 ### Check Caddy is serving correctly
@@ -319,18 +303,18 @@ curl http://192.168.4.1/config.json
 curl http://192.168.4.1/api/networks
 ```
 
-### Chromium won't start / blank screen
+### Chromium crash loop
 ```bash
-ssh rpi-ai "sudo journalctl -u adspace-kiosk --no-pager -n 50"
-# If crash-looping: GPU not ready yet, check RestartSec and ExecStartPre in kiosk service
-# Check GPU device:
-ssh rpi-ai "ls /dev/dri/"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-kiosk --no-pager -n 50"
+# Check for "Opening in existing browser session" → stale singleton, restart will fix it
+# The ExecStartPre kills lingering chromium + wipes SingletonLock automatically on each restart
+ssh pi@adspace-{serial} "sudo systemctl restart adspace-kiosk"
 ```
 
 ### API not running
 ```bash
-ssh rpi-ai "sudo systemctl status adspace-setup-api"
-ssh rpi-ai "ss -tlnp | grep 3000"
+ssh pi@adspace-{serial} "sudo systemctl status adspace-setup-api"
+ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 ```
 
 ---
@@ -340,10 +324,14 @@ ssh rpi-ai "ss -tlnp | grep 3000"
 | Mistake | Why it breaks |
 |---------|--------------|
 | Deploying `config.json` | Pi's runtime SSID gets overwritten with dev defaults |
-| Using `adspace@` for deploy SCP | That user needs password sudo, SCP fails |
 | Removing `--delete` from rsync | Old JS bundles accumulate, Chromium loads wrong one |
 | Scanning WiFi while hotspot is up | `nmcli rescan` hangs indefinitely |
 | Not deleting SSID profile before connect | `key-mgmt: property is missing` error |
 | Using `/etc/machine-id` for SSID | All cloned Pis get identical SSIDs |
 | Merging Chromium profiles | Stale kiosk cache appears in setup page |
 | Enabling adspace-kiosk at boot | Starts before watchdog, race condition, wrong mode |
+| Calling `/usr/bin/chromium` wrapper | Injects unsupported `--js-flags`, crashes immediately |
+| Using labwc instead of cage | labwc 0.9.7 + wlroots-0.19 SEGFAULTs on mode switch on Pi 5 |
+| Using Debian libwlroots-0.18 build | `EGL_BAD_PARAMETER` / exit-21 on Pi 5 GPU; must use RPi build |
+| Skipping `/etc/pam.d/cage` | cage exits with code 21 (ENODEV) |
+| Not killing chromium before cage restart | Singleton handoff → immediate exit → crash loop |

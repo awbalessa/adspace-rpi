@@ -1,7 +1,6 @@
-PI_SSH  := pi@adspace-4d919699
-PI_KEY  := ~/.ssh/ai-agent
-SSH     := ssh -i $(PI_KEY) $(PI_SSH)
-SCP     := scp -i $(PI_KEY)
+PI_SSH  ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
+SSH     := ssh $(PI_SSH)
+SCP     := scp
 BINARY  := wifi-setup-api
 
 .PHONY: build deploy

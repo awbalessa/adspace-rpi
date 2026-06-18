@@ -46,7 +46,7 @@ public/
 
 ## Runtime configuration
 
-`public/config.json` is written by `/opt/adspace/startup-router.sh` on the Pi before the setup service starts. **Key names must exactly match the `SetupConfig` TypeScript type.** Required shape:
+`public/config.json` is written by `watchdog.sh` on the Pi before the setup service starts. **Key names must exactly match the `SetupConfig` TypeScript type.** Required shape:
 
 ```json
 {
@@ -84,9 +84,12 @@ The `/api/*` calls will 404 in dev unless you run the Go API locally or add a Vi
 
 ## Deployment
 
-Built output goes to `dist/`. The Pi's startup script writes `dist/config.json` and Caddy serves the `dist/` folder. Deploy with:
+Built output goes to `dist/`. The watchdog writes `dist/config.json` at runtime and Caddy serves the `dist/` folder. Deploy with:
 
 ```bash
-pnpm build
-scp -r dist/ adspace@rpi5-4gb:/opt/adspace/wifi-setup/dist
+# From repo root — override PI_SSH for the target device:
+make deploy-front PI_SSH=pi@adspace-{serial}
+
+# Or directly from this directory:
+make deploy PI_SSH=pi@adspace-{serial}
 ```

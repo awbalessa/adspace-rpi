@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -14,6 +15,13 @@ import (
 
 func run(args ...string) (string, error) {
 	out, err := exec.Command(args[0], args[1:]...).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func runTimeout(timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, args[0], args[1:]...).Output()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -64,31 +72,47 @@ func wifiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hotspot is on wlan0 — must bring it down before we can connect as a client
-	exec.Command("sudo", "nmcli", "con", "down", "adspace-hotspot").Run()
-	time.Sleep(2 * time.Second)
-
-	// Delete only the existing profile for this specific SSID if it exists
-	// (avoids key-mgmt conflicts without wiping other saved networks)
-	exec.Command("sudo", "nmcli", "con", "delete", body.SSID).Run()
-
-	args := []string{"sudo", "nmcli", "dev", "wifi", "connect", body.SSID, "ifname", "wlan0"}
-	if body.Password != "" {
-		args = append(args, "password", body.Password)
-	}
-
-	if _, err := run(args...); err != nil {
-		// Restore hotspot so the phone can reconnect and try again
-		exec.Command("sudo", "nmcli", "con", "up", "adspace-hotspot").Run()
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not connect to network"})
-		return
-	}
-
-	// Remove setup mode flag — watchdog will detect network is up
-	// and handle tearing down hotspot/caddy/api and restarting kiosk
-	exec.Command("rm", "-f", "/tmp/adspace-setup-mode").Run()
-
+	// Respond immediately before dropping the hotspot.
+	// The phone loses its connection to the Pi when the hotspot goes down,
+	// so any response sent after that point is never received.
+	// We return ok=true optimistically; if the connect fails, the watchdog
+	// will restore setup mode within 15s.
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+
+	// Flush response to the phone before we tear down the hotspot
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	// Small delay to ensure the response is actually transmitted
+	time.Sleep(500 * time.Millisecond)
+
+	// Run the WiFi connect in a goroutine — HTTP handler returns immediately
+	go func() {
+		log.Printf("Connecting to WiFi SSID: %q", body.SSID)
+
+		// Bring hotspot down — wlan0 can't be AP and client simultaneously
+		exec.Command("sudo", "nmcli", "con", "down", "adspace-hotspot").Run()
+		time.Sleep(2 * time.Second)
+
+		// Delete stale profile for this SSID to avoid key-mgmt conflicts
+		exec.Command("sudo", "nmcli", "con", "delete", body.SSID).Run()
+
+		args := []string{"sudo", "nmcli", "dev", "wifi", "connect", body.SSID, "ifname", "wlan0"}
+		if body.Password != "" {
+			args = append(args, "password", body.Password)
+		}
+
+		if _, err := runTimeout(30*time.Second, args...); err != nil {
+			log.Printf("WiFi connect failed for %q: %v — restoring hotspot", body.SSID, err)
+			exec.Command("sudo", "nmcli", "con", "up", "adspace-hotspot").Run()
+			return
+		}
+
+		log.Printf("WiFi connect succeeded for %q — watchdog will enter kiosk mode", body.SSID)
+		// Remove setup mode flag — watchdog detects network is up within 15s
+		// and handles teardown of hotspot/caddy/api and kiosk restart
+		exec.Command("rm", "-f", "/tmp/adspace-setup-mode").Run()
+	}()
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────

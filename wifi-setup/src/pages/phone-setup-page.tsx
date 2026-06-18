@@ -44,26 +44,30 @@ export function PhoneSetupPage() {
     }
 
     setStatusType("connecting");
-    setStatusMsg("Connecting...");
+    setStatusMsg("Attempting to connect — this may take a few seconds. Watch the screen.");
 
     try {
-      const res = await fetch("/api/wifi", {
+      await fetch("/api/wifi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ssid, password }),
       });
 
-      if (!res.ok) throw new Error("failed");
-
+      // The API returns 200 immediately — it doesn't wait to confirm the
+      // connection. The screen switching to kiosk mode is the real confirmation.
+      // Keep the "attempting" state so the technician knows to watch the screen.
+      // If the connection fails, the hotspot will reappear within ~30 seconds.
       setStatusType("success");
-      setStatusMsg("Connected! The screen will start shortly.");
+      setStatusMsg("Attempting to connect — watch the screen. If the hotspot reappears, the password was wrong.");
     } catch {
+      // Only fires if the request itself failed (hotspot dropped mid-request,
+      // API unreachable, etc.) — not if the WiFi password was wrong.
       setStatusType("error");
-      setStatusMsg("Couldn't connect. Check the network name and password.");
+      setStatusMsg("Request failed — try reconnecting to the hotspot and submitting again.");
     }
   }
 
-  const busy = statusType === "connecting";
+  const busy = statusType === "connecting" || statusType === "success";
   const showDropdown = !networksLoading && networks.length > 0 && !manualMode;
 
   return (

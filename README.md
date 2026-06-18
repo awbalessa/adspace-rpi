@@ -33,34 +33,14 @@ Tailscale is how you SSH into any Pi from anywhere — no VPN config, no IP addr
 - Open the app, sign in with the same Google account
 - You're now on the AdSpace network — all Pis are immediately reachable by name
 
-### 2. Generate your personal Tailscale auth key
-You need this to provision new Pis. Each dev has their own key.
-
-- Go to [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys)
-- Click **Generate auth key**
-- Settings:
-  - **Description**: your name / machine (e.g. `aziz-macbook`)
-  - **Reusable**: ON — one key provisions all your Pis
-  - **Ephemeral**: OFF — devices must persist after going offline
-  - **Tags**: ON → `tag:adspace-pi` — disables node key expiry so Pis stay on Tailscale forever
-- Click **Generate key**, copy it
-
-### 3. Add your key to `.env`
-```bash
-cd rpi/
-cp .env.example .env
-# Open .env and paste your key:
-# TAILSCALE_AUTH_KEY=tskey-auth-xxx
-```
-
-`.env` is gitignored — never committed.
-
-### 4. Install dev tools
+### 2. Install dev tools
 ```bash
 brew install go pnpm
 ```
 
 That's it. You can now SSH into any Pi and provision new ones.
+
+> **No auth keys needed.** Tailscale OAuth credentials are embedded in `provision.sh` — Pis self-register on first boot. You only need to be on the AdSpace Tailscale account.
 
 ---
 
@@ -71,7 +51,7 @@ That's it. You can now SSH into any Pi and provision new ones.
 Boot → adspace-watchdog starts
      → detects network (ethernet or WiFi)
      → calls enter_kiosk()
-     → starts adspace-kiosk (labwc → Chromium → https://screen.adspace.so)
+     → starts adspace-kiosk (cage → Chromium → https://screen.adspace.so)
 ```
 
 ### First boot / no network
@@ -81,19 +61,21 @@ Boot → adspace-watchdog starts
      → scans for nearby WiFi networks (before hotspot starts)
      → brings up adspace-hotspot (AP on wlan0, SSID = Adspace-TV-{cpu_serial})
      → starts Caddy + setup API
-     → starts adspace-kiosk (labwc → Chromium → http://localhost/tv)
+     → starts adspace-kiosk (cage → Chromium → http://localhost/tv)
      → TV shows QR code + hotspot credentials
 
 Technician connects phone to Adspace-TV-xxxxxxxx
-     → opens http://192.168.4.1
+     → opens http://192.168.4.1 (captive portal fires automatically)
      → sees WiFi setup page with scanned networks (or manual input)
-     → submits credentials
+     → submits credentials → sees "Attempting to connect" message
 
 API receives credentials
-     → brings down hotspot
-     → connects wlan0 to the submitted network
+     → returns ok immediately (before hotspot drops)
+     → brings down hotspot in background
+     → connects wlan0 to submitted network (up to 30s)
      → watchdog detects network up within 15s
      → calls enter_kiosk() → TV switches to kiosk URL
+     → if connect fails: hotspot restored, technician can retry
 ```
 
 ### Network loss recovery
@@ -113,11 +95,13 @@ Every ~60s in setup mode → try_reconnect():
 ```
 rpi/
 ├── provision.sh              # Run once on fresh Pi — installs everything
+├── flash.sh                  # Full flash orchestrator (provision + deploy + reboot)
 ├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh
-├── start-kiosk.sh            # Source copy of /opt/adspace/start-kiosk.sh
-├── start-setup-display.sh    # Source copy of /opt/adspace/start-setup-display.sh
+├── start-display.sh          # Source copy of /opt/adspace/start-display.sh
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
 ├── Makefile                  # Root: deploy, logs, ssh targets
+├── rename-device.sh          # Rename Pi after venue install
+├── deprovision.sh            # Wipe all adspace config (for re-provisioning tests)
 │
 ├── wifi-setup/               # React frontend (TV page + phone setup page)
 │   ├── src/
@@ -132,8 +116,7 @@ rpi/
 │   └── Makefile              # pnpm build + rsync to Pi
 │
 └── wifi-setup-api/           # Go HTTP API (runs on Pi :3000)
-    ├── main.go               # GET /api/networks, POST /api/wifi
-    └── Makefile              # Cross-compile arm64 + deploy
+    └── main.go               # GET /api/networks, POST /api/wifi
 ```
 
 ---
@@ -142,10 +125,9 @@ rpi/
 
 ```
 /opt/adspace/
-├── watchdog.sh               # Main control loop (run by systemd as root)
-├── start-kiosk.sh            # Launches Chromium in kiosk mode → screen.adspace.so
-├── start-setup-display.sh    # Launches Chromium in kiosk mode → localhost/tv
-├── kiosk.env                 # ADSPACE_URL and ADSPACE_BROWSER vars
+├── watchdog.sh               # Main control loop (run by systemd)
+├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
+├── kiosk.env                 # ADSPACE_URL env var
 ├── wifi-setup-api            # Compiled Go binary (serves :3000)
 └── wifi-setup/
     └── dist/                 # Built React app (served by Caddy on :80)
@@ -153,13 +135,11 @@ rpi/
         ├── assets/
         └── config.json       # Written at runtime by watchdog — NOT in git
 
-/home/adspace/.config/labwc/
-└── autostart                 # Branches on /tmp/adspace-setup-mode flag
-
 /etc/caddy/Caddyfile          # Serves :80, proxies /api/* to :3000, captive portal
+/etc/pam.d/cage               # PAM stack required by cage compositor
 /etc/systemd/system/
 ├── adspace-watchdog.service  # Starts on boot, controls everything else
-├── adspace-kiosk.service     # labwc Wayland session on tty1
+├── adspace-kiosk.service     # cage Wayland session on tty1, boot-disabled
 └── adspace-setup-api.service # Go API, started by watchdog only
 
 /tmp/adspace-setup-mode       # Flag file — exists = setup mode, absent = kiosk
@@ -172,84 +152,75 @@ rpi/
 
 ### Requirements
 - Raspberry Pi 5 (4GB or 8GB)
-- SD card flashed with **RPi OS Lite 64-bit** (Debian Trixie/Bookworm)
-- SSH enabled on the Pi (add empty `/boot/ssh` file, or use Raspberry Pi Imager)
-- Pi connected to internet via ethernet for initial setup
-- Mac with Go installed (`brew install go`) and pnpm (`brew install pnpm`)
+- SD card (16GB+)
+- Mac with Go (`brew install go`) and pnpm (`brew install pnpm`)
+- Ethernet cable for initial provisioning
 
-### Step 1 — Get a Tailscale auth key
-Go to [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) → Generate auth key.
-- ✅ Reusable (so you can use the same key for every Pi)
-- ✅ Ephemeral: No (devices should persist)
-- Tag: `adspace-pi` (optional but useful for filtering)
+### Step 1 — Flash SD card with Raspberry Pi Imager
+- OS: **Raspberry Pi OS Lite (64-bit)**
+- In **OS Customisation**:
+  - Hostname: anything (provision.sh will rename to `adspace-{serial}`)
+  - Username: `pi`, set a password
+  - Enable SSH: yes (password auth)
+  - WiFi: leave blank
+  - Do NOT enable Raspberry Pi Connect
 
-### Step 2 — Run provision script
+### Step 2 — Boot and find the Pi's IP
+Insert SD card, plug in ethernet, power on. Then:
 ```bash
-# From this repo on your Mac — pass the Tailscale key as an env var:
-TAILSCALE_AUTH_KEY=tskey-auth-xxx \
-  ssh pi@<pi-ip-address> "sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" < provision.sh
+arp -a | grep -i rasp
 ```
 
-This is fully idempotent — safe to re-run. If you omit the key, Tailscale is installed but not authenticated (you can auth manually later with `sudo tailscale up --auth-key=...`).
-
-### Step 3 — Deploy the app
+### Step 3 — Run flash.sh
 ```bash
-# Build + deploy frontend and API binary to Pi
-make deploy
+./flash.sh <pi-ip>
 ```
 
-> `make deploy` uses `adspace@rpi5-4gb` by default. For a new Pi, override the target:
-> ```bash
-> PI_SSH=adspace@<ip> make deploy-front
-> # API deploy uses pi — update PI_SSH in Makefile or pass directly
-> ```
+This single command:
+1. Provisions the Pi (installs all deps, configures services, registers with Tailscale)
+2. Builds and deploys the React frontend
+3. Cross-compiles and deploys the Go API binary
+4. Reboots the Pi
 
-### Step 4 — Reboot and verify
-```bash
-ssh pi@<pi-ip-address> sudo reboot
-```
+~10 minutes total.
 
-On reboot:
-- **With ethernet**: Pi boots straight into kiosk → `screen.adspace.so`
-- **Without ethernet**: Pi boots into setup screen, hotspot `Adspace-TV-{serial}` appears
-
-### Step 5 — SSH via Tailscale (after reboot)
-With `--ssh` flag, Tailscale handles SSH auth. No keys needed — just be logged into Tailscale on your Mac:
-```bash
-# Install Tailscale on your Mac if you haven't: https://tailscale.com/download
-ssh pi@adspace-{serial}       # e.g. ssh pi@adspace-4d919699
-```
-
-All team members with Tailscale access to your network can SSH any Pi by name.
+### Step 4 — Verify
+After reboot (~30s):
+- Pi appears in [Tailscale dashboard](https://login.tailscale.com/admin/machines) as `adspace-{serial}` with tag `tag:rpi`
+- SSH from anywhere: `ssh pi@adspace-{serial}`
+- With ethernet: TV shows `screen.adspace.so`
+- Without ethernet: setup screen appears, hotspot `Adspace-TV-{serial}` is visible
 
 ---
 
 ## Day-to-day development
 
+All deploy commands require `PI_SSH`:
+
 ### Deploy everything
 ```bash
-make deploy
+make deploy PI_SSH=pi@adspace-{serial}
 ```
 
 ### Deploy frontend only
 ```bash
-make deploy-front
-# or: cd wifi-setup && make deploy
+make deploy-front PI_SSH=pi@adspace-{serial}
+# or: cd wifi-setup && make deploy PI_SSH=pi@adspace-{serial}
 ```
 
 ### Deploy API only
 ```bash
-make deploy-api
+make deploy-api PI_SSH=pi@adspace-{serial}
 ```
 
 ### Tail live logs
 ```bash
-make logs
+make logs PI_SSH=pi@adspace-{serial}
 ```
 
 ### Open SSH session
 ```bash
-make ssh
+make ssh PI_SSH=pi@adspace-{serial}
 ```
 
 ### Local frontend dev
@@ -266,33 +237,31 @@ pnpm dev
 
 ## Connecting to the Pi
 
-### SSH
+### SSH via Tailscale (normal)
 ```bash
-# Via hostname (requires Pi on Tailscale or same network)
-ssh -i ~/.ssh/coding-agent pi@rpi5-4gb
-
-# Via IP
-ssh -i ~/.ssh/coding-agent pi@<ip>
-
-# Shortcut alias (add to ~/.ssh/config):
-Host rpi-ai
-    HostName rpi5-4gb
-    User pi
-    IdentityFile ~/.ssh/coding-agent
+ssh pi@adspace-{serial}           # e.g. ssh pi@adspace-4d919699
+ssh pi@adspace-dubai-mall-01      # after venue rename
 ```
 
-Then: `ssh rpi-ai`
+No key file needed — Tailscale handles auth. Just be signed into the AdSpace Tailscale account.
 
-### Tailscale (remote access)
-The Pi is enrolled in Tailscale as `rpi5-4gb`. Once on the Tailscale network you can SSH from anywhere:
+Add to `~/.ssh/config` for convenience:
+```
+Host adspace-*
+    User pi
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+```
+
+### SSH by IP (before Tailscale connects)
 ```bash
-ssh pi@rpi5-4gb
+ssh pi@<ip>
 ```
 
 ### Hotspot (setup mode)
 When the Pi has no network:
-- **SSID**: `Adspace-TV-{first 8 chars of CPU serial}`
-- **Password**: same as SSID suffix
+- **SSID**: `Adspace-TV-{cpu_serial}`
+- **Password**: same as SSID suffix (the serial)
 - **Setup page**: http://192.168.4.1 (opens automatically on most phones as captive portal)
 - **TV page**: http://192.168.4.1/tv
 
@@ -303,58 +272,61 @@ When the Pi has no network:
 ### Check system state
 ```bash
 # What mode is the Pi in right now?
-ssh rpi-ai "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KIOSK"
+ssh pi@adspace-{serial} "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KIOSK"
 
 # What's connected?
-ssh rpi-ai "nmcli con show --active"
+ssh pi@adspace-{serial} "nmcli con show --active"
 
 # Watchdog live log
-ssh rpi-ai "sudo journalctl -u adspace-watchdog -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -f"
 
 # Kiosk service log
-ssh rpi-ai "sudo journalctl -u adspace-kiosk -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-kiosk -f"
 
 # API log
-ssh rpi-ai "sudo journalctl -u adspace-setup-api -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-setup-api -f"
 
 # All adspace logs together
-make logs
+make logs PI_SSH=pi@adspace-{serial}
 ```
 
 ### Force setup mode (for testing)
 ```bash
-ssh rpi-ai "sudo nmcli con delete 'YourNetwork' && sudo systemctl restart adspace-watchdog"
+ssh pi@adspace-{serial} "sudo nmcli con delete 'YourNetwork' && sudo systemctl restart adspace-watchdog"
 ```
 
 ### Force kiosk mode
 ```bash
-ssh rpi-ai "sudo rm -f /tmp/adspace-setup-mode && sudo systemctl restart adspace-watchdog"
+ssh pi@adspace-{serial} "sudo rm -f /tmp/adspace-setup-mode && sudo systemctl restart adspace-watchdog"
 ```
 
 ### Restart everything cleanly
 ```bash
-ssh rpi-ai "sudo systemctl restart adspace-watchdog"
-```
-
-### Check what's on disk vs what's deployed
-```bash
-ssh rpi-ai "ls -la /opt/adspace/wifi-setup/dist/assets/"
+ssh pi@adspace-{serial} "sudo systemctl restart adspace-watchdog"
 ```
 
 ### API not responding
 ```bash
-ssh rpi-ai "sudo systemctl status adspace-setup-api"
+ssh pi@adspace-{serial} "sudo systemctl status adspace-setup-api"
 # Check if caddy is running
-ssh rpi-ai "sudo systemctl status caddy"
+ssh pi@adspace-{serial} "sudo systemctl status caddy"
 # Check port 3000
-ssh rpi-ai "ss -tlnp | grep 3000"
+ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 ```
 
-### Chromium caching stale files
-Both Chromium profiles use `--disk-cache-size=1` (setup) or are wiped manually (kiosk).
-To wipe kiosk profile:
+### Chromium won't start / crash loop
 ```bash
-ssh rpi-ai "sudo rm -rf /home/adspace/.config/adspace-chromium"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-kiosk --no-pager -n 50"
+# Check GPU device exists:
+ssh pi@adspace-{serial} "ls /dev/dri/"
+# Wipe stale chromium singleton lock (causes immediate exit if old process was killed uncleanly):
+ssh pi@adspace-{serial} "sudo systemctl restart adspace-kiosk"
+# The ExecStartPre in adspace-kiosk.service kills any lingering chromium + wipes SingletonLock automatically
+```
+
+### Check what's deployed
+```bash
+ssh pi@adspace-{serial} "ls -la /opt/adspace/wifi-setup/dist/assets/"
 ```
 
 ---
@@ -371,7 +343,7 @@ ssh pi@<ip> "sudo bash -s" < deprovision.sh
 ssh pi@<ip> "sudo bash -s" < provision.sh
 
 # Step 3 — Deploy the app
-make deploy
+./flash.sh <ip> --skip-provision
 
 # Step 4 — Reboot and verify
 ssh pi@<ip> sudo reboot
@@ -418,31 +390,56 @@ adspace-cairo-downtown-02
 
 ## Golden image (fleet provisioning)
 
-Once a Pi is provisioned and verified, clone its SD card to flash all future Pis instantly.
+Once a Pi is provisioned and verified, clone its SD card to flash all future Pis instantly. Each cloned Pi self-registers with Tailscale on first boot using its own unique node key — no per-device configuration needed.
 
-### Clone SD card to image (on the Pi itself)
+### Step 1 — Provision and verify your master Pi
+```bash
+./flash.sh <pi-ip>
+```
+Verify it's working correctly (kiosk mode, Tailscale connected, setup flow works end-to-end).
+
+### Step 2 — Dump SD card to image (on your Mac)
+Power off the Pi, remove SD card, insert via USB adapter, then:
 ```bash
 # Find the SD card device
-ssh rpi-ai "lsblk"
+diskutil list | grep -i "FAT32\|Linux"
 
-# Clone (run on a Mac/Linux machine with the SD card inserted, or via Pi)
-sudo dd if=/dev/mmcblk0 of=adspace-golden.img bs=4M status=progress conv=fsync
+# Dump to image (replace disk2 with your actual disk — be careful)
+sudo dd if=/dev/disk2 of=~/adspace-golden.img bs=4m status=progress
 ```
 
-### Shrink the image (optional, saves space)
+### Step 3 — Shrink the image (optional, saves space)
 ```bash
-# Install pishrink on your Mac/Linux
-curl -sL https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh | sudo bash -s adspace-golden.img
+curl -sL https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh | sudo bash -s ~/adspace-golden.img
 ```
 
-### Flash to a new SD card
-Use **Balena Etcher** (GUI) or:
+### Step 4 — Flash to new Pis
+Use **Raspberry Pi Imager** (GUI, recommended for technicians):
+- Click "Use custom image" → select `adspace-golden.img`
+- Select SD card → Flash
+- No OS Customisation needed — everything is already baked in
+
+Or via command line:
 ```bash
-sudo dd if=adspace-golden.img of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=adspace-golden.img of=/dev/sdX bs=4m status=progress conv=fsync
 ```
 
-### Important: machine-id after cloning
-The watchdog uses **CPU serial** (hardware-burned, unique per Pi) for the hotspot SSID — not `/etc/machine-id`. This means cloned images automatically get unique SSIDs. No post-flash configuration needed.
+### Technician workflow (after golden image exists)
+1. Download `adspace-golden.img`
+2. Open Raspberry Pi Imager
+3. Select the `.img` file
+4. Flash SD card — no customisation
+5. Insert into Pi, plug in power + **ethernet**
+6. Done — Pi auto-registers with Tailscale within 60s of boot
+
+**No credentials, no configuration, no technical knowledge required.**
+
+> **Note:** Ethernet is required for first boot (Tailscale device registration). After first boot, the Pi works on WiFi — use the hotspot setup flow to submit credentials.
+
+### Why cloning works safely
+- **Tailscale**: OAuth secret is embedded → each Pi registers itself with a unique node key on first boot
+- **Hostname**: derived from CPU serial at provision time → each Pi gets a unique name
+- **Hotspot SSID**: derived from CPU serial at runtime by watchdog → always unique per board
 
 ---
 
@@ -451,8 +448,23 @@ The watchdog uses **CPU serial** (hardware-burned, unique per Pi) for the hotspo
 ### Single watchdog, not many services
 One `adspace-watchdog.service` (polling loop) controls all transitions. Simpler than a web of oneshot services with `After=`/`Wants=` dependencies that are hard to reason about.
 
-### labwc as Wayland compositor
-RPi5 uses the Pi GPU driver which works best with Wayland. labwc is lightweight, stable, and starts Chromium via its `autostart` file. The autostart script branches on `/tmp/adspace-setup-mode` to decide which Chromium to launch.
+### cage as Wayland compositor
+RPi5 uses the Pi GPU driver (vc4/drm). We use **cage** (`libwlroots-0.18`, RPi build `0.18.2-3+rpt4+b1`) as the Wayland compositor — it's purpose-built for single-app kiosks and restarts cleanly on mode switches.
+
+**Why not labwc:** labwc 0.9.7 + wlroots-0.19 (the version in RPi OS) SEGFAULTs on SIGTERM when Chromium holds GPU resources, making mode switching unreliable on Pi 5. cage + wlroots-0.18 is stable.
+
+**Why pin `libwlroots-0.18`:** Must use the RPi build (`0.18.2-3+rpt4+b1`), not the Debian build. The Debian build fails with `EGL_BAD_PARAMETER` / exit-21 on Pi 5 GPU.
+
+### Single `start-display.sh` for both modes
+One script checks `/tmp/adspace-setup-mode` and launches Chromium pointing at the correct URL. Replaces the old `start-kiosk.sh` + `start-setup-display.sh` split.
+
+Chromium is called directly as `/usr/lib/chromium/chromium` — bypasses the `/usr/bin/chromium` RPi wrapper which injects `--js-flags=--no-decommit-pooled-pages` (unsupported flag → immediate crash on this version).
+
+### Kill chromium before each cage start
+cage's `ExecStartPre` kills any lingering `adspace`-owned chromium processes before starting. Without this, the new chromium detects the old process's SingletonLock, hands off the URL to it, and exits immediately — causing cage to exit too, creating a crash loop.
+
+### Optimistic WiFi connect response
+`POST /api/wifi` returns `{"ok": true}` immediately — before the hotspot is torn down. This is intentional: the phone loses its connection to the Pi when the hotspot drops, so any response sent after that is never received. The actual connect happens in a background goroutine. The screen switching to kiosk = success. Hotspot reappearing = wrong password, try again.
 
 ### Separate Chromium profiles
 - Kiosk: `adspace-chromium` — persists cache between sessions
@@ -461,13 +473,10 @@ RPi5 uses the Pi GPU driver which works best with Wayland. labwc is lightweight,
 This prevents a stale kiosk JS bundle from bleeding into the setup page (a real bug we hit).
 
 ### WiFi scan before hotspot starts
-`wlan0` can't be AP and WiFi client simultaneously. The watchdog scans and caches results to `/tmp/adspace-wifi-scan.json` *before* bringing up the hotspot. The API serves from this cache instantly.
+`wlan0` can't be AP and WiFi client simultaneously. The watchdog scans and caches results to `/tmp/adspace-wifi-scan.json` *before* bringing up the hotspot. The API serves from this cache — it never scans live.
 
 ### CPU serial for SSID uniqueness
 `/etc/machine-id` is identical on all Pi clones. CPU serial (`/proc/cpuinfo`) is hardware-burned and unique per board — safe to use even after SD card cloning.
-
-### Hotspot-down reconnect loop
-Every ~60s in setup mode, the watchdog briefly brings down the hotspot to let NetworkManager reconnect to any previously saved WiFi. Handles the case where a known network comes back in range after setup mode was entered.
 
 ### config.json never deployed
 The Pi writes `/opt/adspace/wifi-setup/dist/config.json` at runtime (hotspot SSID, password, URL). The repo's `public/config.json` is local-dev only. rsync uses `--exclude='config.json'` and `.gitignore` excludes it.

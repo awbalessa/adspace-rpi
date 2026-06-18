@@ -9,15 +9,26 @@
 #   4. Reboots the Pi
 #
 # USAGE:
-#   ./flash.sh <pi-ip> <tailscale-auth-key>
+#   ./flash.sh <pi-ip-or-hostname> [options]
+#
+# OPTIONS:
+#   --user <user>        SSH user (default: pi)
+#   --key <path>         SSH identity file (default: none, uses ssh-agent)
+#   --skip-provision     Skip provisioning, re-deploy only
 #
 # EXAMPLES:
-#   ./flash.sh 192.168.1.50 tskey-auth-xxxxx        # fresh Pi
-#   ./flash.sh 192.168.1.50 tskey-auth-xxxxx --skip-provision  # re-deploy only
+#   # Fresh Pi — connect as pi (RPi OS default)
+#   ./flash.sh 192.168.1.50
+#
+#   # Already-provisioned Pi — connect as aiagent with key (no password needed)
+#   ./flash.sh adspace-c0c2489e --user aiagent --key ~/.ssh/ai-agent
+#
+#   # Re-deploy only, no provision
+#   ./flash.sh adspace-c0c2489e --user aiagent --key ~/.ssh/ai-agent --skip-provision
 #
 # PRE-REQUISITES:
 #   - Pi is flashed with RPi OS Lite 64-bit via Raspberry Pi Imager
-#     (username: pi, SSH enabled, ethernet connected)
+#     (username: pi, SSH enabled, ethernet connected, WiFi left blank)
 #   - Go installed on your Mac (brew install go)
 #   - pnpm installed on your Mac (brew install pnpm)
 #   - This repo cloned locally
@@ -39,37 +50,51 @@ if [[ -f "$REPO_DIR/.env" ]]; then
 fi
 
 # ── Args ──────────────────────────────────────────────────────────────────────
-PI_IP="${1:-}"
-TAILSCALE_KEY="${2:-${TAILSCALE_AUTH_KEY:-}}"
-SKIP_PROVISION="${3:-}"
-
-[[ -n "$PI_IP" ]] || die "Usage: ./flash.sh <pi-ip> [tailscale-auth-key] [--skip-provision]"
-[[ -n "$TAILSCALE_KEY" ]] || warn "No Tailscale key found — set TAILSCALE_AUTH_KEY in .env or pass as second arg"
+PI_HOST="${1:-}"
+[[ -n "$PI_HOST" ]] || die "Usage: ./flash.sh <pi-ip-or-hostname> [--user <user>] [--key <path>] [--skip-provision]"
 
 PI_USER="pi"
-PI_SSH="${PI_USER}@${PI_IP}"
+SSH_KEY=""
+SKIP_PROVISION=""
+
+shift
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --user) PI_USER="$2"; shift 2 ;;
+        --key)  SSH_KEY="$2";  shift 2 ;;
+        --skip-provision) SKIP_PROVISION="yes"; shift ;;
+        *) die "Unknown argument: $1" ;;
+    esac
+done
+
+# Build SSH options
+SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no"
+SCP_OPTS="-o StrictHostKeyChecking=no"
+RSYNC_SSH="ssh -o StrictHostKeyChecking=no"
+if [[ -n "$SSH_KEY" ]]; then
+    SSH_OPTS="$SSH_OPTS -i $SSH_KEY"
+    SCP_OPTS="$SCP_OPTS -i $SSH_KEY"
+    RSYNC_SSH="$RSYNC_SSH -i $SSH_KEY"
+fi
+
+PI_SSH="${PI_USER}@${PI_HOST}"
 
 section "AdSpace Pi Flash — target: $PI_SSH"
 
 # ── Check SSH reachable ───────────────────────────────────────────────────────
 log "Checking SSH connection to $PI_SSH..."
-ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$PI_SSH" "echo ok" \
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "$PI_SSH" "echo ok" \
   || die "Cannot reach $PI_SSH — is the Pi on ethernet and booted?"
 
 # ── Step 1: Provision ─────────────────────────────────────────────────────────
-if [[ "$SKIP_PROVISION" != "--skip-provision" ]]; then
+if [[ -z "$SKIP_PROVISION" ]]; then
     section "Step 1/4 — Provisioning Pi"
-
-    if [[ -n "$TAILSCALE_KEY" ]]; then
-        log "Provisioning with Tailscale auth..."
-        ssh -o StrictHostKeyChecking=no "$PI_SSH" \
-            "TAILSCALE_AUTH_KEY=${TAILSCALE_KEY} sudo --preserve-env=TAILSCALE_AUTH_KEY bash -s" \
-            < "$REPO_DIR/provision.sh"
-    else
-        warn "No Tailscale key provided — Tailscale will be installed but not authenticated"
-        ssh -o StrictHostKeyChecking=no "$PI_SSH" "sudo bash -s" \
-            < "$REPO_DIR/provision.sh"
-    fi
+    log "Uploading provision.sh..."
+    # shellcheck disable=SC2086
+    scp $SCP_OPTS "$REPO_DIR/provision.sh" "$PI_SSH":/tmp/provision.sh
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "$PI_SSH" "sudo bash /tmp/provision.sh"
 else
     warn "Skipping provision (--skip-provision passed)"
 fi
@@ -81,7 +106,10 @@ pnpm install --frozen-lockfile
 pnpm build
 
 section "Step 3/4 — Deploying frontend"
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "$PI_SSH" "sudo chown -R pi:pi /opt/adspace/wifi-setup/dist && sudo chmod -R 775 /opt/adspace/wifi-setup/dist" 2>/dev/null || true
 rsync -av --delete --exclude='config.json' \
+    -e "$RSYNC_SSH" \
     dist/* \
     "${PI_SSH}:/opt/adspace/wifi-setup/dist"
 
@@ -90,27 +118,40 @@ section "Step 3/4 — Building + deploying API"
 cd "$REPO_DIR/wifi-setup-api"
 GOOS=linux GOARCH=arm64 go build -o wifi-setup-api .
 
-scp wifi-setup-api "${PI_SSH}:/tmp/wifi-setup-api-new"
-ssh "$PI_SSH" "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
+# shellcheck disable=SC2086
+scp $SCP_OPTS wifi-setup-api "${PI_SSH}:/tmp/wifi-setup-api-new"
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "$PI_SSH" "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
+             && sudo chown adspace:adspace /opt/adspace/wifi-setup-api \
              && sudo chmod +x /opt/adspace/wifi-setup-api"
 
 # ── Step 4: Reboot ────────────────────────────────────────────────────────────
 section "Step 4/4 — Rebooting"
 log "Pi will reboot now. Watch the TV..."
-ssh "$PI_SSH" "sudo reboot" || true  # connection drops on reboot, that's expected
+# shellcheck disable=SC2086
+ssh $SSH_OPTS "$PI_SSH" "sudo reboot" || true  # connection drops on reboot, that's expected
 
 # ── Done ──────────────────────────────────────────────────────────────────────
-DEVICE_NAME="adspace-$(ssh -o ConnectTimeout=5 "$PI_SSH" "grep Serial /proc/cpuinfo | awk '{print \$3}' | tail -c 9" 2>/dev/null || echo '?')"
-
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}✓  Flash complete!${NC}"
 echo ""
-echo "   Device name: ${DEVICE_NAME}"
+echo "   Pi is rebooting now."
 echo ""
-echo "   After reboot (~30s), SSH via Tailscale:"
-echo "   ssh pi@${DEVICE_NAME}"
+echo "   WAIT 60 SECONDS, then verify:"
 echo ""
-echo "   Or by IP until Tailscale connects:"
-echo "   ssh pi@${PI_IP}"
+echo "   1. Get the hostname:"
+echo "      ssh ${PI_SSH} cat /etc/hostname"
+echo ""
+echo "   2. Verify passwordless sudo:"
+echo "      ssh ${PI_SSH} sudo -l"
+echo ""
+echo "   3. Check kiosk service:"
+echo "      ssh ${PI_SSH} sudo systemctl status adspace-kiosk"
+echo ""
+echo "   4. Check watchdog service:"
+echo "      ssh ${PI_SSH} sudo systemctl status adspace-watchdog"
+echo ""
+echo "   Once Tailscale connects (~60s), SSH by hostname:"
+echo "      ssh pi@adspace-{serial}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
