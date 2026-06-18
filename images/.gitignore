@@ -1,0 +1,5 @@
+# Image files are stored in object storage (S3/R2), not git.
+# See README for upload/download instructions.
+*.img
+*.img.gz
+*.img.xz

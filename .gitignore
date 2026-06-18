@@ -18,3 +18,8 @@ wifi-setup/dist/config.json
 .DS_Store
 *.swp
 *.swo
+
+# SD card images — stored in object storage, not git
+images/*.img
+images/*.img.gz
+images/*.img.xz

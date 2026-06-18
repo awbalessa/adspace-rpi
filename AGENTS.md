@@ -172,6 +172,21 @@ cage needs its own PAM stack. `PAMName=cage` in the service unit points to `/etc
 
 ---
 
+## First-boot service
+
+`adspace-firstboot.service` runs **once per device** on first boot (or after flashing a golden image). It handles per-device setup that can't be baked into the image:
+
+1. **Hostname** — sets from CPU serial (`adspace-{serial}`)
+2. **Tailscale** — registers with OAuth key, gets unique node key
+
+It uses `ConditionPathExists=!/etc/adspace-firstboot-done` — systemd skips it if the flag file exists. After successful completion it writes the flag and disables itself permanently.
+
+**Why not in provision.sh:** Provision runs once during initial setup. For cloned images, each new Pi needs its own Tailscale node key and hostname — these must run on the actual hardware, not on the source Pi.
+
+**Resetting for image dump:** Run `prepare-image.sh` before dumping — it wipes Tailscale state, the done flag, SSH host keys, and machine ID so each clone starts clean.
+
+---
+
 ## File locations on Pi
 
 | Path | Purpose |
@@ -189,6 +204,9 @@ cage needs its own PAM stack. `PAMName=cage` in the service unit points to `/etc
 | `/etc/systemd/system/adspace-setup-api.service` | Go API, started by watchdog only |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
+| `/etc/adspace-firstboot-done` | Flag: exists = first-boot already ran, skip it |
+| `/opt/adspace/firstboot.sh` | First-boot script (hostname + Tailscale registration) |
+| `/etc/systemd/system/adspace-firstboot.service` | One-shot first-boot service |
 
 ---
 

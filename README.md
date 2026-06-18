@@ -404,48 +404,71 @@ Once a Pi is provisioned and verified, clone its SD card to flash all future Pis
 ```
 Verify it's working correctly (kiosk mode, Tailscale connected, setup flow works end-to-end).
 
-### Step 2 — Dump SD card to image (on your Mac)
-Power off the Pi, remove SD card, insert via USB adapter, then:
+### Step 2 — Prepare the Pi for imaging
+Run this before dumping — wipes all per-device state so each clone self-configures:
+```bash
+ssh pi@adspace-{serial} "sudo bash -s" < prepare-image.sh
+```
+
+This wipes:
+- Tailscale node key (each clone gets its own on first boot)
+- First-boot done flag (triggers `adspace-firstboot.service` on next boot)
+- SSH host keys (each clone generates its own)
+- Machine ID (regenerated on first boot)
+
+**Power off immediately after — do not reboot:**
+```bash
+ssh pi@adspace-{serial} "sudo poweroff"
+```
+
+### Step 3 — Dump SD card to image (on your Mac)
+Remove SD card, insert via USB adapter, then:
 ```bash
 # Find the SD card device
 diskutil list | grep -i "FAT32\|Linux"
 
-# Dump to image (replace disk2 with your actual disk — be careful)
-sudo dd if=/dev/disk2 of=~/adspace-golden.img bs=4m status=progress
+# Unmount (don't eject)
+diskutil unmountDisk /dev/diskN
+
+# Dump to versioned image
+sudo dd if=/dev/diskN of=~/code/nizek/adspace/rpi/images/adspace-tv-v0.1.0.img bs=16m status=progress
 ```
 
-### Step 3 — Shrink the image (optional, saves space)
+### Step 4 — Shrink the image (saves space, faster to share)
 ```bash
-curl -sL https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh | sudo bash -s ~/adspace-golden.img
+curl -sL https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh | sudo bash -s ~/code/nizek/adspace/rpi/images/adspace-tv-v0.1.0.img
 ```
 
-### Step 4 — Flash to new Pis
+### Step 5 — Flash to new Pis
 Use **Raspberry Pi Imager** (GUI, recommended for technicians):
-- Click "Use custom image" → select `adspace-golden.img`
+- Click "Use custom image" → select `adspace-tv-v0.1.0.img`
 - Select SD card → Flash
-- No OS Customisation needed — everything is already baked in
+- No OS Customisation needed — everything is baked in
 
 Or via command line:
 ```bash
-sudo dd if=adspace-golden.img of=/dev/sdX bs=4m status=progress conv=fsync
+sudo dd if=adspace-tv-v0.1.0.img of=/dev/sdX bs=16m status=progress conv=fsync
 ```
 
-### Technician workflow (after golden image exists)
-1. Download `adspace-golden.img`
-2. Open Raspberry Pi Imager
-3. Select the `.img` file
-4. Flash SD card — no customisation
-5. Insert into Pi, plug in power + **ethernet**
-6. Done — Pi auto-registers with Tailscale within 60s of boot
+### Technician workflow (after image exists)
+1. Flash SD card with `adspace-tv-v0.1.0.img` using Raspberry Pi Imager
+2. Insert SD card into Pi
+3. Plug in ethernet
+4. Power on
+5. Done — Pi self-configures within 60s:
+   - Sets hostname from CPU serial
+   - Registers with Tailscale (unique node key)
+   - Starts kiosk if ethernet has internet, setup mode if not
 
 **No credentials, no configuration, no technical knowledge required.**
 
-> **Note:** Ethernet is required for first boot (Tailscale device registration). After first boot, the Pi works on WiFi — use the hotspot setup flow to submit credentials.
+> **Note:** Ethernet is required on first boot for Tailscale registration. After that, WiFi-only works fine via the hotspot setup flow.
 
 ### Why cloning works safely
-- **Tailscale**: OAuth secret is embedded → each Pi registers itself with a unique node key on first boot
-- **Hostname**: derived from CPU serial at provision time → each Pi gets a unique name
+- **Tailscale**: `prepare-image.sh` wipes state → each clone registers fresh with its own node key via `adspace-firstboot.service`
+- **Hostname**: set from CPU serial by `adspace-firstboot.service` → unique per board
 - **Hotspot SSID**: derived from CPU serial at runtime by watchdog → always unique per board
+- **SSH host keys**: wiped by `prepare-image.sh` → each clone generates its own on first boot
 
 ---
 

@@ -561,26 +561,93 @@ nmcli con add \
     ipv4.addresses 192.168.4.1/24 \
     ipv6.method disabled
 
-# ── 13. Tailscale — permanent remote access via OAuth ────────────────────────
-log "Setting up Tailscale..."
+# ── 13. Tailscale — install only, registration handled by adspace-firstboot ──
+log "Installing Tailscale..."
 
-# Install Tailscale if not present
 if ! command -v tailscale &>/dev/null; then
     curl -fsSL https://tailscale.com/install.sh | sh
 fi
 
-systemctl enable --now tailscaled
+systemctl enable tailscaled
+# Do NOT run tailscale up here — registration happens in adspace-firstboot.service
+# so that cloned images each get their own unique node key on first boot.
 
-# OAuth secret is embedded — each Pi self-registers on first boot with its own node key.
+# ── 14. First-boot service — runs once per device, then disables itself ───────
+# Handles per-device setup that must happen after cloning:
+#   - Tailscale registration (unique node key per board)
+#   - Hostname set from CPU serial (unique per board)
+# Safe to run during normal provision too — idempotent.
+log "Installing adspace-firstboot service..."
+
+cat > /opt/adspace/firstboot.sh << 'FIRSTBOOT'
+#!/usr/bin/env bash
+# adspace-firstboot: runs once on first boot (or after image flash).
+# Sets hostname from CPU serial and registers with Tailscale.
+# Disables itself after successful completion.
+
+set -euo pipefail
+
+log() { echo "adspace-firstboot: $*"; logger -t adspace-firstboot "$*"; }
+
+log "Starting first-boot setup..."
+
+# ── Hostname from CPU serial ──────────────────────────────────────────────────
+CPU_SERIAL=$(grep Serial /proc/cpuinfo | awk '{print $3}')
+NEW_HOSTNAME="adspace-${CPU_SERIAL: -8}"
+OLD_HOSTNAME=$(hostname)
+
+if [ "$OLD_HOSTNAME" != "$NEW_HOSTNAME" ]; then
+    log "Setting hostname: $OLD_HOSTNAME → $NEW_HOSTNAME"
+    echo "$NEW_HOSTNAME" > /etc/hostname
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    sed -i "s/127\.0\.1\.1\s.*$/127.0.1.1\t$NEW_HOSTNAME/" /etc/hosts 2>/dev/null || true
+    grep -q '127.0.1.1' /etc/hosts || echo -e "127.0.1.1\t$NEW_HOSTNAME" >> /etc/hosts
+else
+    log "Hostname already $NEW_HOSTNAME"
+fi
+
+# ── Tailscale registration ────────────────────────────────────────────────────
 TAILSCALE_OAUTH_CLIENT_SECRET="tskey-client-koZCgE2fK421CNTRL-WAfqtB3SRXSeqKSUgJTcWSjoD1vxFbGF"
 
-log "Registering device with Tailscale..."
+log "Registering with Tailscale as $NEW_HOSTNAME..."
 tailscale up \
     --auth-key="${TAILSCALE_OAUTH_CLIENT_SECRET}?ephemeral=false&preauthorized=true" \
     --advertise-tags=tag:rpi \
-    --hostname="${NEW_HOSTNAME}" \
+    --hostname="$NEW_HOSTNAME" \
     --accept-routes
-log "Tailscale registered: ${NEW_HOSTNAME}"
+log "Tailscale registered: $NEW_HOSTNAME"
+
+# ── Self-disable — never runs again ──────────────────────────────────────────
+log "First-boot complete. Disabling service."
+systemctl disable adspace-firstboot.service
+FIRSTBOOT
+
+chmod +x /opt/adspace/firstboot.sh
+chown root:root /opt/adspace/firstboot.sh
+
+cat > /etc/systemd/system/adspace-firstboot.service << 'EOF'
+[Unit]
+Description=AdSpace First Boot Setup
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+ConditionPathExists=!/etc/adspace-firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/opt/adspace/firstboot.sh
+ExecStartPost=/bin/touch /etc/adspace-firstboot-done
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable adspace-firstboot.service
+
+log "First-boot service installed — will run on next boot"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 log ""
