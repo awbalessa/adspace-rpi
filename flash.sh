@@ -94,7 +94,7 @@ if [[ -z "$SKIP_PROVISION" ]]; then
     # shellcheck disable=SC2086
     scp $SCP_OPTS "$REPO_DIR/provision.sh" "$PI_SSH":/tmp/provision.sh
     # shellcheck disable=SC2086
-    ssh $SSH_OPTS "$PI_SSH" "sudo bash /tmp/provision.sh"
+    ssh -t $SSH_OPTS "$PI_SSH" "sudo bash /tmp/provision.sh"
 else
     warn "Skipping provision (--skip-provision passed)"
 fi
