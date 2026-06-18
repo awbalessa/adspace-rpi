@@ -155,16 +155,19 @@ Do not remove the `--delete` flag.
 The watchdog calls `systemctl restart adspace-kiosk` explicitly.
 If `adspace-kiosk` is enabled at boot AND `Restart=always`, it starts itself before watchdog is ready, causing race conditions. It is boot-disabled intentionally — watchdog controls it.
 
-### 10. Kill chromium before each cage start
-`ExecStartPre` in `adspace-kiosk.service` kills all `adspace`-owned chromium processes before cage starts. Without this, the new chromium detects the old session's SingletonLock, hands off the URL to the still-running process, and exits immediately — cage exits too — systemd restarts — crash loop.
+### 10. Wipe SingletonLock before each cage start
+`ExecStartPre` in `adspace-kiosk.service` removes the chromium SingletonLock files before cage starts. `KillMode=control-group` already kills all processes in the cgroup (including chromium) when the service stops, so explicit `pkill` is not needed — and is dangerous: `pkill -f <path>` matches the `sh -c '...'` ExecStartPre process itself (the path string appears in its own argv), killing it with SIGHUP and causing a crash loop.
 
-### 11. Call chromium binary directly, not the wrapper
+### 11. adspace-kiosk conflicts with getty@tty1
+`Conflicts=getty@tty1.service` in `adspace-kiosk.service` ensures systemd stops the getty autologin session before cage starts. Without it, when cage exits, `TTYVHangup=yes` hangs up tty1, getty respawns and autologins `adspace` with a bash shell on tty1, and the next cage start gets HUP'd from tty1 being held.
+
+### 12. Call chromium binary directly, not the wrapper
 Use `/usr/lib/chromium/chromium`, not `/usr/bin/chromium`. The RPi wrapper (`rpi-chromium-mods`) injects `--js-flags=--no-decommit-pooled-pages` which is unsupported on this Chromium version and causes an immediate crash.
 
-### 12. cage requires libwlroots-0.18 (RPi build)
+### 13. cage requires libwlroots-0.18 (RPi build)
 Must use `libwlroots-0.18=0.18.2-3+rpt4+b1` (RPi build). The Debian build of wlroots-0.18 fails with `EGL_BAD_PARAMETER` on Pi 5 GPU. libwlroots-0.19 (used by labwc) causes SEGV on mode switch. Both can coexist but cage must link against 0.18.
 
-### 13. cage requires /etc/pam.d/cage
+### 14. cage requires /etc/pam.d/cage
 cage needs its own PAM stack. `PAMName=cage` in the service unit points to `/etc/pam.d/cage`. Without it, cage exits with code 21 (ENODEV).
 
 ---
@@ -241,6 +244,9 @@ adspace-kiosk.service
 
 Both endpoints are served by the Go binary on `:3000`, proxied through Caddy on `:80`.
 
+### Connectivity check
+The watchdog uses `nmcli networking connectivity` (not connection profile state) to determine if the Pi has internet. NM keeps ethernet profiles `activated` even when the cable is unplugged — profile state is useless. `nmcli networking connectivity` returns `full` only when NM's internet probe succeeds. Two consecutive failures are required before entering setup mode, to avoid false triggers from momentary NM probe blips.
+
 ### `GET /api/networks`
 Returns cached WiFi scan from before hotspot started.
 ```json
@@ -258,6 +264,8 @@ Initiates WiFi connection. Returns immediately — connect happens in background
 { "ok": true }
 ```
 The API returns before the connection attempt completes. Success = screen switches to kiosk within ~15s. Failure = hotspot reappears within ~35s so the technician can retry.
+
+The hotspot restore on failure uses `nohup` so it survives if systemd kills the API process before the goroutine finishes (e.g. watchdog detects ethernet reconnect and stops the API mid-goroutine).
 
 ---
 
@@ -283,6 +291,12 @@ ssh pi@adspace-{serial} "sudo nmcli con delete 'NetworkName' && sudo systemctl r
 ### Force into kiosk mode
 ```bash
 ssh pi@adspace-{serial} "sudo rm -f /tmp/adspace-setup-mode && sudo systemctl restart adspace-watchdog"
+```
+
+### Grab a screenshot of the current display
+```bash
+make screenshot PI_SSH=pi@adspace-{serial}
+# Saves to /tmp/adspace-screen.png and opens in Preview on Mac
 ```
 
 ### Check WiFi scan cache
@@ -334,4 +348,6 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Using labwc instead of cage | labwc 0.9.7 + wlroots-0.19 SEGFAULTs on mode switch on Pi 5 |
 | Using Debian libwlroots-0.18 build | `EGL_BAD_PARAMETER` / exit-21 on Pi 5 GPU; must use RPi build |
 | Skipping `/etc/pam.d/cage` | cage exits with code 21 (ENODEV) |
-| Not killing chromium before cage restart | Singleton handoff → immediate exit → crash loop |
+| Using `pkill -f <path>` in ExecStartPre | Matches the sh process running ExecStartPre itself → SIGHUP crash loop |
+| Missing `Conflicts=getty@tty1.service` | getty respawns bash on tty1 after cage exits → HUP kills next cage start |
+| Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |

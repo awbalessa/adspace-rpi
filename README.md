@@ -218,6 +218,12 @@ make deploy-api PI_SSH=pi@adspace-{serial}
 make logs PI_SSH=pi@adspace-{serial}
 ```
 
+### Grab a screenshot of what's on the TV
+```bash
+make screenshot PI_SSH=pi@adspace-{serial}
+# Saves to /tmp/adspace-screen.png and opens in Preview on Mac
+```
+
 ### Open SSH session
 ```bash
 make ssh PI_SSH=pi@adspace-{serial}
