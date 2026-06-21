@@ -9,7 +9,7 @@ CHROMIUM_BIN=/usr/lib/chromium/chromium
 if [ -f /tmp/adspace-setup-mode ]; then
     # Wait for Caddy to be ready before launching browser
     for i in $(seq 1 10); do
-        curl -sf http://localhost/tv >/dev/null 2>&1 && break
+        curl -sf http://localhost/ >/dev/null 2>&1 && break
         sleep 1
     done
 
@@ -27,7 +27,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --password-store=basic \
         --disk-cache-size=1 \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
-        "http://localhost/tv"
+        "http://localhost/"
 else
     source /opt/adspace/kiosk.env
     exec "$CHROMIUM_BIN" \
