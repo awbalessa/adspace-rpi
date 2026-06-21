@@ -11,7 +11,7 @@ wifi-setup/dist/config.json
 # Local secrets — never commit
 .env
 
-# provision.sh contains embedded Tailscale OAuth secret — keep repo private
+# bootstrap.sh contains embedded Tailscale OAuth secret — keep repo private
 # or rotate the secret if this repo ever becomes public
 
 # OS / editor

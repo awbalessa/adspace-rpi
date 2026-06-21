@@ -13,10 +13,32 @@ One always-on systemd service (`adspace-watchdog`) drives all state transitions.
 
 ---
 
+## How a new Pi gets set up
+
+The entire provisioning model is runtime — a vanilla RPi OS Lite image is used, with `bootstrap.sh` injected into it via `embed.sh`. On first boot, `bootstrap.sh` installs everything from scratch and pulls app artifacts from GitHub Releases.
+
+**Boot sequence on a new Pi:**
+```
+Boot 1: RPi OS firstrun.sh runs → copies bootstrap.sh, enables adspace-bootstrap.service → reboots
+Boot 2: adspace-bootstrap.service runs → full provisioning (~10 min, needs ethernet) → reboots
+Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
+```
+
+**To cut a new base image (Mac-side, one time):**
+```bash
+brew install e2fsprogs   # required for debugfs
+./embed.sh ~/Downloads/rpios-lite.img
+# Outputs: adspace-tv.img — flash this with Raspberry Pi Imager
+```
+
+**There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
+
+---
+
 ## SSH access
 
 ### Pi naming
-Each Pi's hostname follows the pattern `adspace-{cpu_serial}` by default (set during provisioning). After a device is installed at a venue it can be renamed with `rename-device.sh`:
+Each Pi's hostname follows the pattern `adspace-{cpu_serial}` — set by `bootstrap.sh` on first boot from the hardware CPU serial. After a device is installed at a venue it can be renamed with `rename-device.sh`:
 
 ```
 adspace-{cpu_serial}          default, e.g. adspace-4d919699
@@ -88,15 +110,24 @@ scp wifi-setup-api pi@adspace-{serial}:/tmp/wifi-setup-api-new
 ssh pi@adspace-{serial} "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
          && sudo chown adspace:adspace /opt/adspace/wifi-setup-api \
          && sudo chmod +x /opt/adspace/wifi-setup-api \
-         && sudo systemctl restart adspace-setup-api.service"
+         && sudo systemctl start adspace-setup-api.service || true"
 ```
 
 ### Watchdog / shell scripts
-Edit locally, then push to Pi:
+`watchdog.sh` and `start-display.sh` exist both as standalone files in the repo root AND as heredocs embedded inside `bootstrap.sh`. **If you edit either script, you must update both the standalone file and the embedded copy inside `bootstrap.sh`.** Freshly provisioned Pis get the embedded version.
+
+Push the updated file to a running Pi:
 ```bash
 ssh pi@adspace-{serial} "sudo tee /opt/adspace/watchdog.sh" < watchdog.sh
 ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemctl restart adspace-watchdog"
 ```
+
+### Releasing a new version (frontend + API)
+Tag and push — GitHub Actions builds both artifacts and publishes them to GitHub Releases:
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+Newly provisioned Pis will pull the latest release. Existing Pis need `make deploy`.
 
 ---
 
@@ -106,8 +137,9 @@ ssh pi@adspace-{serial} "sudo chmod +x /opt/adspace/watchdog.sh && sudo systemct
 `/opt/adspace/wifi-setup/dist/config.json` is written at runtime by `watchdog.sh`.
 - `wifi-setup/public/config.json` is local dev only (fallback values)
 - `rsync` in `wifi-setup/Makefile` uses `--exclude='config.json'`
+- `bootstrap.sh` deletes `config.json` after unpacking the frontend tarball
 - `.gitignore` excludes both paths
-- **Do not add config.json to deploys, commits, or rsync commands**
+- **Do not add config.json to deploys, commits, rsync commands, or bootstrap**
 
 ### 2. wlan0 cannot AP and client simultaneously
 When the hotspot is up, `wlan0` is in AP mode. You cannot:
@@ -149,7 +181,8 @@ Never merge these. Stale kiosk bundles bled into setup mode — this was a real 
 
 ### 8. Old JS bundles accumulate and break things
 `rsync --delete` in `wifi-setup/Makefile` ensures stale bundles are removed on every deploy.
-Do not remove the `--delete` flag.
+`bootstrap.sh` unpacks the frontend tarball fresh each time.
+Do not remove the `--delete` flag from rsync.
 
 ### 9. adspace-kiosk.service has Restart=always but is boot-disabled
 The watchdog calls `systemctl restart adspace-kiosk` explicitly.
@@ -170,20 +203,49 @@ Must use `libwlroots-0.18=0.18.2-3+rpt4+b1` (RPi build). The Debian build of wlr
 ### 14. cage requires /etc/pam.d/cage
 cage needs its own PAM stack. `PAMName=cage` in the service unit points to `/etc/pam.d/cage`. Without it, cage exits with code 21 (ENODEV).
 
+### 15. HDMI force on Pi 5 uses dtparam, not legacy settings
+Pi 5 uses KMS/DRM — the old `hdmi_force_hotplug=1`, `hdmi_group`, `hdmi_mode` settings are silently ignored. The correct setting for Pi 5 is:
+```
+[all]
+dtparam=hdmi_force_hotplug=1
+```
+`bootstrap.sh` removes legacy settings and writes the correct one. Do not reintroduce the legacy settings.
+
+### 16. bootstrap.sh and standalone scripts must stay in sync
+`watchdog.sh` and `start-display.sh` are embedded as heredocs inside `bootstrap.sh` (steps 7). The standalone files in the repo root are used for pushing updates to running Pis. **Both must be updated together.** Freshly provisioned Pis get the bootstrap-embedded version.
+
 ---
 
-## First-boot service
+## Bootstrap service
 
-`adspace-firstboot.service` runs **once per device** on first boot (or after flashing a golden image). It handles per-device setup that can't be baked into the image:
+`adspace-bootstrap.service` runs **once per device** on Boot 2 (after firstrun triggers a reboot). It does full provisioning from scratch:
 
-1. **Hostname** — sets from CPU serial (`adspace-{serial}`)
-2. **Tailscale** — registers with OAuth key, gets unique node key
+1. Waits for internet (retry loop, no timeout)
+2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, etc.
+3. Configures NetworkManager, disables conflicting network services
+4. Fixes boot config (HDMI for Pi 5)
+5. Creates users: `adspace`, `pi` (sudoers), `aiagent` (sudoers + SSH key)
+6. Configures tty1 autologin
+7. Writes all scripts to `/opt/adspace/`: `watchdog.sh`, `start-display.sh`, `kiosk.env`
+8. Writes `/etc/pam.d/cage`
+9. Writes `/etc/caddy/Caddyfile`
+10. Installs all systemd units: `adspace-kiosk`, `adspace-watchdog`, `adspace-setup-api`
+11. Disables cloud-init
+12. Sets hostname from CPU serial
+13. Sets WiFi country (AE), unblocks rfkill
+14. Creates hotspot nmcli profile
+15. Installs and registers Tailscale
+16. Pulls `wifi-setup-api` binary + `wifi-setup-dist.tar.gz` from latest GitHub Release
+17. Touches `/etc/adspace-bootstrap-done`, reboots
 
-It uses `ConditionPathExists=!/etc/adspace-firstboot-done` — systemd skips it if the flag file exists. After successful completion it writes the flag and disables itself permanently.
+Guarded by `ConditionPathExists=!/etc/adspace-bootstrap-done` — never runs twice.
 
-**Why not in provision.sh:** Provision runs once during initial setup. For cloned images, each new Pi needs its own Tailscale node key and hostname — these must run on the actual hardware, not on the source Pi.
-
-**Resetting for image dump:** Run `prepare-image.sh` before dumping — it wipes Tailscale state, the done flag, SSH host keys, and machine ID so each clone starts clean.
+**Re-running bootstrap** (on an existing Pi, for testing):
+```bash
+ssh pi@adspace-{serial} "sudo rm /etc/adspace-bootstrap-done && sudo reboot"
+# Or run directly:
+ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
+```
 
 ---
 
@@ -191,6 +253,7 @@ It uses `ConditionPathExists=!/etc/adspace-firstboot-done` — systemd skips it 
 
 | Path | Purpose |
 |------|---------|
+| `/opt/adspace/bootstrap.sh` | Full provisioning script — written by embed.sh/firstrun.sh |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var |
@@ -199,14 +262,13 @@ It uses `ConditionPathExists=!/etc/adspace-firstboot-done` — systemd skips it 
 | `/opt/adspace/wifi-setup/dist/config.json` | Runtime-written by watchdog — never deploy |
 | `/etc/caddy/Caddyfile` | Serves :80, proxies /api/*, captive portal redirects |
 | `/etc/pam.d/cage` | Required PAM stack for cage compositor |
-| `/etc/systemd/system/adspace-watchdog.service` | Starts on boot |
+| `/etc/systemd/system/adspace-bootstrap.service` | One-shot, Boot 2 only, guarded by done flag |
+| `/etc/systemd/system/adspace-watchdog.service` | Starts on boot (every boot after bootstrap) |
 | `/etc/systemd/system/adspace-kiosk.service` | cage Wayland session on tty1, boot-disabled |
 | `/etc/systemd/system/adspace-setup-api.service` | Go API, started by watchdog only |
+| `/etc/adspace-bootstrap-done` | Flag: exists = bootstrap already ran, skip it |
 | `/tmp/adspace-setup-mode` | Flag: exists = setup mode, absent = kiosk mode |
 | `/tmp/adspace-wifi-scan.json` | WiFi scan cache from before hotspot started |
-| `/etc/adspace-firstboot-done` | Flag: exists = first-boot already ran, skip it |
-| `/opt/adspace/firstboot.sh` | First-boot script (hostname + Tailscale registration) |
-| `/etc/systemd/system/adspace-firstboot.service` | One-shot first-boot service |
 
 ---
 
@@ -244,7 +306,8 @@ It uses `ConditionPathExists=!/etc/adspace-firstboot-done` — systemd skips it 
 
 ```
 systemd boot
-    └── adspace-watchdog.service (starts on boot)
+    ├── adspace-bootstrap.service  (Boot 2 only — full provisioning, then reboots)
+    └── adspace-watchdog.service   (every boot after bootstrap, controls everything)
             ├── adspace-kiosk.service     (watchdog: systemctl restart)
             ├── adspace-setup-api.service (watchdog: systemctl start/stop)
             └── caddy.service             (watchdog: systemctl start/stop)
@@ -298,7 +361,13 @@ ssh pi@adspace-{serial} "[ -f /tmp/adspace-setup-mode ] && echo SETUP || echo KI
 ```bash
 make logs PI_SSH=pi@adspace-{serial}
 # or:
-ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -f"
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-bootstrap -f"
+```
+
+### Check bootstrap status (new Pi)
+```bash
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-bootstrap --no-pager"
+ssh pi@adspace-{serial} "ls /etc/adspace-bootstrap-done && echo DONE || echo NOT DONE"
 ```
 
 ### Force into setup mode (for testing)
@@ -369,3 +438,6 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Using `pkill -f <path>` in ExecStartPre | Matches the sh process running ExecStartPre itself → SIGHUP crash loop |
 | Missing `Conflicts=getty@tty1.service` | getty respawns bash on tty1 after cage exits → HUP kills next cage start |
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
+| Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
+| Editing watchdog.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
+| Running embed.sh without e2fsprogs | `debugfs` not found — run `brew install e2fsprogs` first |

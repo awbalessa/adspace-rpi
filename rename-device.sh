@@ -6,10 +6,10 @@
 # at a venue. Hostname is used by Tailscale for SSH access.
 #
 # Usage:
-#   ssh pi@<ip> "sudo bash -s" < rename-device.sh <new-name>
+#   ssh pi@<ip> "sudo bash -s <new-name>" < rename-device.sh
 #
 # Example:
-#   ssh pi@192.168.1.50 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
+#   ssh pi@192.168.1.50 "sudo bash -s adspace-dubai-mall-01" < rename-device.sh
 #
 # Naming convention:
 #   adspace-{city/venue slug}-{2-digit index}

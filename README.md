@@ -10,12 +10,13 @@ This repo contains everything needed to turn a **Raspberry Pi 5** into an AdSpac
 2. [How it works](#how-it-works)
 3. [Repository layout](#repository-layout)
 4. [Pi file layout](#pi-file-layout)
-5. [Quick start — provisioning a new Pi](#quick-start--provisioning-a-new-pi)
+5. [Quick start — setting up a new Pi](#quick-start--setting-up-a-new-pi)
 6. [Day-to-day development](#day-to-day-development)
 7. [Connecting to the Pi](#connecting-to-the-pi)
 8. [Debugging](#debugging)
-9. [Golden image (fleet provisioning)](#golden-image-fleet-provisioning)
-10. [Architecture decisions](#architecture-decisions)
+9. [Testing bootstrap (without reflashing)](#testing-bootstrap-without-reflashing)
+10. [Pi naming](#pi-naming)
+11. [Architecture decisions](#architecture-decisions)
 
 ---
 
@@ -35,12 +36,12 @@ Tailscale is how you SSH into any Pi from anywhere — no VPN config, no IP addr
 
 ### 2. Install dev tools
 ```bash
-brew install go pnpm
+brew install go pnpm e2fsprogs
 ```
 
-That's it. You can now SSH into any Pi and provision new ones.
+That's it. You can now SSH into any Pi and set up new ones.
 
-> **No auth keys needed.** Tailscale OAuth credentials are embedded in `provision.sh` — Pis self-register on first boot. You only need to be on the AdSpace Tailscale account.
+> **No auth keys needed.** Tailscale OAuth credentials are embedded in `bootstrap.sh` — Pis self-register on first boot. You only need to be on the AdSpace Tailscale account.
 
 ---
 
@@ -94,14 +95,19 @@ Every ~60s in setup mode → try_reconnect():
 
 ```
 rpi/
-├── provision.sh              # Run once on fresh Pi — installs everything
-├── flash.sh                  # Full flash orchestrator (provision + deploy + reboot)
-├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh
-├── start-display.sh          # Source copy of /opt/adspace/start-display.sh
+├── bootstrap.sh              # Full provisioning — runs on Pi first boot, installs everything
+├── adspace-bootstrap.service # Systemd unit that runs bootstrap.sh once on first boot
+├── embed.sh                  # Mac tool: injects bootstrap into vanilla RPi OS .img
+├── watchdog.sh               # Source copy of /opt/adspace/watchdog.sh (also embedded in bootstrap.sh)
+├── start-display.sh          # Source copy of /opt/adspace/start-display.sh (also embedded in bootstrap.sh)
 ├── kiosk.env                 # Source copy of /opt/adspace/kiosk.env
-├── Makefile                  # Root: deploy, logs, ssh targets
+├── Makefile                  # Root: embed, deploy, logs, screenshot, ssh targets
 ├── rename-device.sh          # Rename Pi after venue install
-├── deprovision.sh            # Wipe all adspace config (for re-provisioning tests)
+├── deprovision.sh            # Wipe all adspace config (for re-testing bootstrap)
+│
+├── .github/
+│   └── workflows/
+│       └── release.yml       # Builds wifi-setup-api + frontend dist on version tag, publishes to GitHub Releases
 │
 ├── wifi-setup/               # React frontend (TV page + phone setup page)
 │   ├── src/
@@ -119,73 +125,83 @@ rpi/
     └── main.go               # GET /api/networks, POST /api/wifi
 ```
 
+> **Note:** `watchdog.sh` and `start-display.sh` are standalone files here for pushing updates to running Pis, but they are also embedded as heredocs inside `bootstrap.sh`. If you edit either, update both places.
+
 ---
 
 ## Pi file layout
 
 ```
 /opt/adspace/
+├── bootstrap.sh              # Full provisioning script (written by embed.sh/firstrun.sh)
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
 ├── kiosk.env                 # ADSPACE_URL env var
-├── wifi-setup-api            # Compiled Go binary (serves :3000)
+├── wifi-setup-api            # Compiled Go binary (serves :3000) — pulled from GitHub Releases
 └── wifi-setup/
-    └── dist/                 # Built React app (served by Caddy on :80)
+    └── dist/                 # Built React app (served by Caddy on :80) — pulled from GitHub Releases
         ├── index.html
         ├── assets/
-        └── config.json       # Written at runtime by watchdog — NOT in git
+        └── config.json       # Written at runtime by watchdog — NOT in git, NOT deployed
 
 /etc/caddy/Caddyfile          # Serves :80, proxies /api/* to :3000, captive portal
 /etc/pam.d/cage               # PAM stack required by cage compositor
 /etc/systemd/system/
+├── adspace-bootstrap.service # One-shot, Boot 2 only, guarded by /etc/adspace-bootstrap-done
 ├── adspace-watchdog.service  # Starts on boot, controls everything else
 ├── adspace-kiosk.service     # cage Wayland session on tty1, boot-disabled
 └── adspace-setup-api.service # Go API, started by watchdog only
 
+/etc/adspace-bootstrap-done   # Flag file — exists = bootstrap already ran, skip it
 /tmp/adspace-setup-mode       # Flag file — exists = setup mode, absent = kiosk
 /tmp/adspace-wifi-scan.json   # WiFi scan cache (written before hotspot starts)
 ```
 
 ---
 
-## Quick start — provisioning a new Pi
+## Quick start — setting up a new Pi
 
 ### Requirements
 - Raspberry Pi 5 (4GB or 8GB)
 - SD card (16GB+)
-- Mac with Go (`brew install go`) and pnpm (`brew install pnpm`)
-- Ethernet cable for initial provisioning
+- Mac with `brew install go pnpm e2fsprogs`
+- Ethernet cable (required for first-boot provisioning)
+- Vanilla **Raspberry Pi OS Lite 64-bit** `.img` from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
 
-### Step 1 — Flash SD card with Raspberry Pi Imager
-- OS: **Raspberry Pi OS Lite (64-bit)**
-- In **OS Customisation**:
-  - Hostname: anything (provision.sh will rename to `adspace-{serial}`)
-  - Username: `pi`, set a password
-  - Enable SSH: yes (password auth)
-  - WiFi: leave blank
-  - Do NOT enable Raspberry Pi Connect
+### Step 1 — Build the base image (one time, reuse for all Pis)
+```bash
+./embed.sh ~/Downloads/2025-xx-xx-raspios-bookworm-arm64-lite.img
+# Outputs: adspace-tv.img in the repo root
+```
 
-### Step 2 — Boot and find the Pi's IP
+This injects `bootstrap.sh` + `adspace-bootstrap.service` into the vanilla image so the Pi self-provisions on first boot. You only need to do this once — reuse `adspace-tv.img` for every Pi.
+
+### Step 2 — Flash the image
+Open **Raspberry Pi Imager**:
+- OS: **Use Custom** → select `adspace-tv.img`
+- Storage: your SD card
+- In OS Customisation (the gear icon):
+  - Set **username** to `pi` and a password (needed for first SSH before Tailscale connects)
+  - Enable **SSH** (password authentication)
+  - Leave everything else blank (hostname, WiFi — bootstrap handles them)
+- Flash
+
+### Step 3 — Boot and wait
 Insert SD card, plug in ethernet, power on. Then:
-```bash
-arp -a | grep -i rasp
+
+```
+Boot 1 (~1 min):  RPi firstrun.sh enables adspace-bootstrap.service → reboots
+Boot 2 (~10 min): bootstrap.sh runs — installs packages, pulls app from GitHub, registers Tailscale → reboots
+Boot 3:           Kiosk is live at https://screen.adspace.so
 ```
 
-### Step 3 — Run flash.sh
+You can follow Boot 2 progress by SSH-ing in via IP (find it on your router) and watching:
 ```bash
-./flash.sh <pi-ip>
+ssh pi@<ip> "sudo journalctl -u adspace-bootstrap -f"
 ```
-
-This single command:
-1. Provisions the Pi (installs all deps, configures services, registers with Tailscale)
-2. Builds and deploys the React frontend
-3. Cross-compiles and deploys the Go API binary
-4. Reboots the Pi
-
-~10 minutes total.
 
 ### Step 4 — Verify
-After reboot (~30s):
+Once bootstrap completes and the Pi reboots:
 - Pi appears in [Tailscale dashboard](https://login.tailscale.com/admin/machines) as `adspace-{serial}` with tag `tag:rpi`
 - SSH from anywhere: `ssh pi@adspace-{serial}`
 - With ethernet: TV shows `screen.adspace.so`
@@ -238,6 +254,13 @@ pnpm dev
 # /tv → TV display page
 # Uses wifi-setup/public/config.json for local config (not deployed to Pi)
 ```
+
+### Releasing a new version
+Tag and push — GitHub Actions builds both artifacts automatically:
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+This publishes `wifi-setup-api` (arm64 binary) and `wifi-setup-dist.tar.gz` to GitHub Releases. Newly provisioned Pis pull the latest release. Existing Pis need `make deploy`.
 
 ---
 
@@ -292,8 +315,14 @@ ssh pi@adspace-{serial} "sudo journalctl -u adspace-kiosk -f"
 # API log
 ssh pi@adspace-{serial} "sudo journalctl -u adspace-setup-api -f"
 
-# All adspace logs together
+# All adspace logs together (including bootstrap)
 make logs PI_SSH=pi@adspace-{serial}
+```
+
+### Check bootstrap status (new Pi)
+```bash
+ssh pi@adspace-{serial} "sudo journalctl -u adspace-bootstrap --no-pager"
+ssh pi@adspace-{serial} "ls /etc/adspace-bootstrap-done && echo DONE || echo NOT DONE"
 ```
 
 ### Force setup mode (for testing)
@@ -314,9 +343,7 @@ ssh pi@adspace-{serial} "sudo systemctl restart adspace-watchdog"
 ### API not responding
 ```bash
 ssh pi@adspace-{serial} "sudo systemctl status adspace-setup-api"
-# Check if caddy is running
 ssh pi@adspace-{serial} "sudo systemctl status caddy"
-# Check port 3000
 ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 ```
 
@@ -325,58 +352,54 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 ssh pi@adspace-{serial} "sudo journalctl -u adspace-kiosk --no-pager -n 50"
 # Check GPU device exists:
 ssh pi@adspace-{serial} "ls /dev/dri/"
-# Wipe stale chromium singleton lock (causes immediate exit if old process was killed uncleanly):
+# Restart kiosk — ExecStartPre wipes SingletonLock automatically:
 ssh pi@adspace-{serial} "sudo systemctl restart adspace-kiosk"
-# The ExecStartPre in adspace-kiosk.service kills any lingering chromium + wipes SingletonLock automatically
 ```
 
 ### Check what's deployed
 ```bash
 ssh pi@adspace-{serial} "ls -la /opt/adspace/wifi-setup/dist/assets/"
+ssh pi@adspace-{serial} "md5sum /opt/adspace/wifi-setup-api"
 ```
 
 ---
 
-## Testing provision.sh (without reflashing)
+## Testing bootstrap (without reflashing)
 
-Before cutting a golden image, test the full provision on your dev Pi by deprovisioning and reprovisioning in place. Faster than reflashing, catches all the same issues.
+To test the full bootstrap flow on a Pi that's already running:
 
 ```bash
 # Step 1 — Wipe all adspace config (simulates a fresh Pi)
-ssh pi@<ip> "sudo bash -s" < deprovision.sh
+ssh pi@adspace-{serial} "sudo bash -s" < deprovision.sh
 
-# Step 2 — Reprovision from scratch
-ssh pi@<ip> "sudo bash -s" < provision.sh
+# Step 2 — Remove the done flag and reboot — bootstrap runs automatically
+ssh pi@adspace-{serial} "sudo rm -f /etc/adspace-bootstrap-done && sudo reboot"
 
-# Step 3 — Deploy the app
-./flash.sh <ip> --skip-provision
-
-# Step 4 — Reboot and verify
-ssh pi@<ip> sudo reboot
+# Or run bootstrap directly (skips the reboot guard):
+ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 ```
 
-**What to verify after reboot:**
-- [ ] With ethernet plugged in: TV shows `screen.adspace.so` within 30s
+**What to verify after bootstrap completes:**
+- [ ] With ethernet plugged in: TV shows `screen.adspace.so` within 30s of final reboot
 - [ ] Ethernet unplugged + no saved WiFi: setup screen appears, hotspot `Adspace-TV-{serial}` visible
 - [ ] Phone connects to hotspot → opens `http://192.168.4.1` → WiFi form with network dropdown
 - [ ] Submit valid WiFi creds → TV transitions to kiosk within 15s
-- [ ] Unplug ethernet, saved WiFi in range: Pi auto-reconnects within 60s
 - [ ] `make logs` shows clean watchdog transitions
 
 ---
 
 ## Pi naming
 
-Each Pi gets a hostname based on its CPU serial number during provisioning:
+Each Pi gets a hostname based on its CPU serial number during bootstrap:
 ```
 adspace-{8-char cpu serial}    e.g. adspace-4d919699
 ```
 
-This is **hardware-burned and unique per board** — safe for SD card cloning (unlike `/etc/machine-id` which gets cloned identically).
+This is **hardware-burned and unique per board** — safe across all Pis (unlike `/etc/machine-id` which can be cloned identically).
 
 Once a Pi is installed at a venue, rename it:
 ```bash
-ssh pi@adspace-4d919699 "sudo bash -s" < rename-device.sh adspace-dubai-mall-01
+ssh pi@adspace-4d919699 "sudo bash -s adspace-dubai-mall-01" < rename-device.sh
 ```
 
 After rename + reboot, SSH via Tailscale from anywhere:
@@ -394,85 +417,16 @@ adspace-cairo-downtown-02
 
 ---
 
-## Golden image (fleet provisioning)
-
-Once a Pi is provisioned and verified, clone its SD card to flash all future Pis instantly. Each cloned Pi self-registers with Tailscale on first boot using its own unique node key — no per-device configuration needed.
-
-### Step 1 — Provision and verify your master Pi
-```bash
-./flash.sh <pi-ip>
-```
-Verify it's working correctly (kiosk mode, Tailscale connected, setup flow works end-to-end).
-
-### Step 2 — Prepare the Pi for imaging
-Run this before dumping — wipes all per-device state so each clone self-configures:
-```bash
-ssh pi@adspace-{serial} "sudo bash -s" < prepare-image.sh
-```
-
-This wipes:
-- Tailscale node key (each clone gets its own on first boot)
-- First-boot done flag (triggers `adspace-firstboot.service` on next boot)
-- SSH host keys (each clone generates its own)
-- Machine ID (regenerated on first boot)
-
-**Power off immediately after — do not reboot:**
-```bash
-ssh pi@adspace-{serial} "sudo poweroff"
-```
-
-### Step 3 — Dump SD card to image (on your Mac)
-Remove SD card, insert via USB adapter, then:
-```bash
-# Find the SD card device
-diskutil list | grep -i "FAT32\|Linux"
-
-# Unmount (don't eject)
-diskutil unmountDisk /dev/diskN
-
-# Dump to versioned image
-sudo dd if=/dev/diskN of=~/code/nizek/adspace/rpi/images/adspace-tv-v0.1.0.img bs=16m status=progress
-```
-
-### Step 4 — Shrink the image (saves space, faster to share)
-```bash
-curl -sL https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh | sudo bash -s ~/code/nizek/adspace/rpi/images/adspace-tv-v0.1.0.img
-```
-
-### Step 5 — Flash to new Pis
-Use **Raspberry Pi Imager** (GUI, recommended for technicians):
-- Click "Use custom image" → select `adspace-tv-v0.1.0.img`
-- Select SD card → Flash
-- No OS Customisation needed — everything is baked in
-
-Or via command line:
-```bash
-sudo dd if=adspace-tv-v0.1.0.img of=/dev/sdX bs=16m status=progress conv=fsync
-```
-
-### Technician workflow (after image exists)
-1. Flash SD card with `adspace-tv-v0.1.0.img` using Raspberry Pi Imager
-2. Insert SD card into Pi
-3. Plug in ethernet
-4. Power on
-5. Done — Pi self-configures within 60s:
-   - Sets hostname from CPU serial
-   - Registers with Tailscale (unique node key)
-   - Starts kiosk if ethernet has internet, setup mode if not
-
-**No credentials, no configuration, no technical knowledge required.**
-
-> **Note:** Ethernet is required on first boot for Tailscale registration. After that, WiFi-only works fine via the hotspot setup flow.
-
-### Why cloning works safely
-- **Tailscale**: `prepare-image.sh` wipes state → each clone registers fresh with its own node key via `adspace-firstboot.service`
-- **Hostname**: set from CPU serial by `adspace-firstboot.service` → unique per board
-- **Hotspot SSID**: derived from CPU serial at runtime by watchdog → always unique per board
-- **SSH host keys**: wiped by `prepare-image.sh` → each clone generates its own on first boot
-
----
-
 ## Architecture decisions
+
+### Full runtime provisioning
+A vanilla RPi OS Lite image has `bootstrap.sh` + `adspace-bootstrap.service` injected via `embed.sh` (Mac-side). On first boot, bootstrap installs all packages, configures all services, and pulls the app binary + frontend from GitHub Releases. No "golden image" to maintain, no `prepare-image.sh` step, no cloning workflow. Any Pi flashed from `adspace-tv.img` self-configures completely on first boot.
+
+### GitHub Releases for app artifacts
+`bootstrap.sh` fetches `wifi-setup-api` and `wifi-setup-dist.tar.gz` from the latest GitHub Release. This means:
+- No Mac-side deploy step during provisioning
+- Every new Pi gets the latest released version automatically
+- Version is explicit and auditable in the release history
 
 ### Single watchdog, not many services
 One `adspace-watchdog.service` (polling loop) controls all transitions. Simpler than a web of oneshot services with `After=`/`Wants=` dependencies that are hard to reason about.
@@ -488,9 +442,6 @@ RPi5 uses the Pi GPU driver (vc4/drm). We use **cage** (`libwlroots-0.18`, RPi b
 One script checks `/tmp/adspace-setup-mode` and launches Chromium pointing at the correct URL. Replaces the old `start-kiosk.sh` + `start-setup-display.sh` split.
 
 Chromium is called directly as `/usr/lib/chromium/chromium` — bypasses the `/usr/bin/chromium` RPi wrapper which injects `--js-flags=--no-decommit-pooled-pages` (unsupported flag → immediate crash on this version).
-
-### Kill chromium before each cage start
-cage's `ExecStartPre` kills any lingering `adspace`-owned chromium processes before starting. Without this, the new chromium detects the old process's SingletonLock, hands off the URL to it, and exits immediately — causing cage to exit too, creating a crash loop.
 
 ### Optimistic WiFi connect response
 `POST /api/wifi` returns `{"ok": true}` immediately — before the hotspot is torn down. This is intentional: the phone loses its connection to the Pi when the hotspot drops, so any response sent after that is never received. The actual connect happens in a background goroutine. The screen switching to kiosk = success. Hotspot reappearing = wrong password, try again.
@@ -508,4 +459,4 @@ This prevents a stale kiosk JS bundle from bleeding into the setup page (a real 
 `/etc/machine-id` is identical on all Pi clones. CPU serial (`/proc/cpuinfo`) is hardware-burned and unique per board — safe to use even after SD card cloning.
 
 ### config.json never deployed
-The Pi writes `/opt/adspace/wifi-setup/dist/config.json` at runtime (hotspot SSID, password, URL). The repo's `public/config.json` is local-dev only. rsync uses `--exclude='config.json'` and `.gitignore` excludes it.
+The Pi writes `/opt/adspace/wifi-setup/dist/config.json` at runtime (hotspot SSID, password, URL). The repo's `public/config.json` is local-dev only. rsync uses `--exclude='config.json'` and `.gitignore` excludes it. `bootstrap.sh` also explicitly deletes it after unpacking the frontend tarball.

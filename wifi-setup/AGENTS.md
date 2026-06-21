@@ -39,7 +39,7 @@ src/
     tv-setup-page.tsx      # TV view — WIFI: QR + credentials + fallback URL QR
     phone-setup-page.tsx   # Phone view — network dropdown, password toggle
 public/
-  config.json              # Runtime config written by the Pi startup script
+  config.json              # LOCAL DEV ONLY — fallback values, never deployed to Pi
   favicon.svg
   icons.svg
 ```

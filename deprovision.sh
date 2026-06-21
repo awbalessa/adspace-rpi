@@ -2,11 +2,16 @@
 # =============================================================================
 # AdSpace RPi Deprovision Script
 # =============================================================================
-# Undoes everything provision.sh did. Use to test provisioning on an existing
+# Undoes everything bootstrap.sh did. Use to test bootstrap on an existing
 # Pi WITHOUT reflashing the SD card.
 #
 # Usage:
 #   ssh pi@<ip> "sudo bash -s" < deprovision.sh
+#
+# After running this, re-trigger bootstrap:
+#   ssh pi@<ip> "sudo rm -f /etc/adspace-bootstrap-done && sudo reboot"
+# Or run it directly:
+#   ssh pi@<ip> "sudo /opt/adspace/bootstrap.sh"
 #
 # WARNING: This removes all adspace config, users, and services.
 #          Only use on a dev/test Pi — never on a live device.
@@ -27,23 +32,22 @@ systemctl stop adspace-setup-api.service 2>/dev/null || true
 systemctl stop caddy.service             2>/dev/null || true
 
 log "Disabling services..."
-systemctl disable adspace-watchdog.service  2>/dev/null || true
-systemctl disable adspace-kiosk.service     2>/dev/null || true
-systemctl disable adspace-setup-api.service 2>/dev/null || true
+systemctl disable adspace-watchdog.service   2>/dev/null || true
+systemctl disable adspace-kiosk.service      2>/dev/null || true
+systemctl disable adspace-setup-api.service  2>/dev/null || true
+systemctl disable adspace-bootstrap.service  2>/dev/null || true
 
 log "Removing systemd units..."
 rm -f /etc/systemd/system/adspace-watchdog.service
 rm -f /etc/systemd/system/adspace-kiosk.service
 rm -f /etc/systemd/system/adspace-setup-api.service
+rm -f /etc/systemd/system/adspace-bootstrap.service
 rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
 rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null || true
 systemctl daemon-reload
 
 log "Removing /opt/adspace..."
 rm -rf /opt/adspace
-
-log "Removing labwc autostart..."
-rm -f /home/adspace/.config/labwc/autostart
 
 log "Resetting Caddyfile..."
 cat > /etc/caddy/Caddyfile << 'EOF'
@@ -56,9 +60,10 @@ EOF
 log "Removing nmcli hotspot profile..."
 nmcli con delete adspace-hotspot 2>/dev/null || true
 
-log "Removing runtime flags..."
+log "Removing runtime flags and bootstrap done flag..."
 rm -f /tmp/adspace-setup-mode
 rm -f /tmp/adspace-wifi-scan.json
+rm -f /etc/adspace-bootstrap-done
 
 log "Removing sudoers..."
 rm -f /etc/sudoers.d/aiagent /etc/sudoers.d/ai-agent 2>/dev/null || true
@@ -69,15 +74,27 @@ userdel -r aiagent 2>/dev/null || warn "aiagent user not found or already remove
 log "Removing adspace user..."
 userdel -r adspace 2>/dev/null || warn "adspace user not found or already removed"
 
+log "Removing PAM cage config..."
+rm -f /etc/pam.d/cage
+
+log "Removing sudoers entries..."
+rm -f /etc/sudoers.d/adspace
+rm -f /etc/sudoers.d/aiagent
+rm -f /etc/sudoers.d/ai-agent 2>/dev/null || true
+
 log "Logging out of Tailscale..."
 if command -v tailscale &>/dev/null; then
     tailscale logout 2>/dev/null || true
 fi
-# Note: we don't uninstall Tailscale itself — provision.sh skips reinstall if already present
+# Note: we don't uninstall Tailscale itself — bootstrap.sh skips reinstall if already present
 
 log ""
 log "────────────────────────────────────────────────────────"
 log "✓  Deprovision complete. Pi is back to bare OS state."
-log "   Run provision.sh to reprovision:"
-log "   ssh pi@<ip> 'sudo bash -s' < provision.sh"
+log ""
+log "   Re-trigger bootstrap:"
+log "   ssh pi@<ip> 'sudo rm -f /etc/adspace-bootstrap-done && sudo reboot'"
+log ""
+log "   Or run bootstrap directly:"
+log "   ssh pi@<ip> 'sudo /opt/adspace/bootstrap.sh'"
 log "────────────────────────────────────────────────────────"
