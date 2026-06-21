@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: wifi-setup-api/go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: false
+
+      # ── Build Go API binary (linux/arm64) ────────────────────────────────────
+      - name: Build wifi-setup-api
+        working-directory: wifi-setup-api
+        run: GOOS=linux GOARCH=arm64 go build -o wifi-setup-api .
+
+      # ── Build React frontend ─────────────────────────────────────────────────
+      - name: Install frontend deps
+        working-directory: wifi-setup
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: wifi-setup
+        run: pnpm build
+
+      - name: Package frontend dist
+        working-directory: wifi-setup
+        run: tar -czf ../wifi-setup-dist.tar.gz -C dist .
+
+      # ── Create GitHub release with both artifacts ────────────────────────────
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wifi-setup-api/wifi-setup-api
+            wifi-setup-dist.tar.gz
+          generate_release_notes: true

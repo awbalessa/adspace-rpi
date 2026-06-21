@@ -1,0 +1,17 @@
+[Unit]
+Description=AdSpace Bootstrap — first-boot full provisioning
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/etc/adspace-bootstrap-done
+
+[Service]
+Type=oneshot
+ExecStart=/opt/adspace/bootstrap.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+# No timeout — apt + GitHub downloads take as long as they take
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

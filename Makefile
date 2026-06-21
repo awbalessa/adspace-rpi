@@ -1,32 +1,35 @@
-# AdSpace RPi — root Makefile
+# AdSpace RPi — Makefile
 #
-# ── Full device setup (new Pi) ─────────────────────────────────────────
-#   make flash IP=192.168.1.50
+# ── Image prep (one time, when cutting a new base image) ──────────────────────
+#   make embed IMG=~/Downloads/rpios-lite.img
 #
-# ── Day-to-day deploy (existing Pi) ───────────────────────────────
-#   make deploy PI_SSH=pi@adspace-{serial}              — frontend + API
-#   make deploy-front PI_SSH=pi@adspace-{serial}        — frontend only
-#   make deploy-api PI_SSH=pi@adspace-{serial}          — API binary only
-#   make logs PI_SSH=pi@adspace-{serial}                — tail all logs
-#   make screenshot PI_SSH=pi@adspace-{serial}          — grab current screen → /tmp/adspace-screen.png
-#   make ssh PI_SSH=pi@adspace-{serial}                 — open shell
+# ── Day-to-day deploy (existing Pi) ──────────────────────────────────────────
+#   make deploy PI_SSH=pi@adspace-{serial}         — frontend + API
+#   make deploy-front PI_SSH=pi@adspace-{serial}   — frontend only
+#   make deploy-api PI_SSH=pi@adspace-{serial}     — API binary only
+#
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+#   make logs PI_SSH=pi@adspace-{serial}
+#   make screenshot PI_SSH=pi@adspace-{serial}
+#   make ssh PI_SSH=pi@adspace-{serial}
 
-PI_SSH    ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
-SSH       := ssh $(PI_SSH)
-SCP       := scp
+PI_SSH ?= $(error PI_SSH is required. Usage: make deploy PI_SSH=pi@adspace-{serial})
+IMG    ?= $(error IMG is required. Usage: make embed IMG=~/Downloads/rpios-lite.img)
 
-.PHONY: flash deploy deploy-front deploy-api logs screenshot ssh
+SSH  := ssh $(PI_SSH)
+SCP  := scp
 
-# ── Full flash (provision + deploy + reboot) ──────────────────────────
-flash:
-	@[[ -n "$(IP)" ]] || (echo "Usage: make flash IP=<pi-ip>"; exit 1)
-	@bash flash.sh "$(IP)"
+.PHONY: embed deploy deploy-front deploy-api logs screenshot ssh
 
-# ── Day-to-day deploy ──────────────────────────────────────────────
+# ── Image prep ────────────────────────────────────────────────────────────────
+embed:
+	@bash embed.sh "$(IMG)"
+
+# ── Day-to-day deploy ─────────────────────────────────────────────────────────
 deploy: deploy-front deploy-api
 
 deploy-front:
-	$(MAKE) -C wifi-setup deploy
+	$(MAKE) -C wifi-setup deploy PI_SSH=$(PI_SSH)
 
 deploy-api:
 	cd wifi-setup-api && GOOS=linux GOARCH=arm64 go build -o wifi-setup-api .
@@ -35,10 +38,11 @@ deploy-api:
 	$(SSH) "sudo mv /tmp/wifi-setup-api-new /opt/adspace/wifi-setup-api \
 	     && sudo chown adspace:adspace /opt/adspace/wifi-setup-api \
 	     && sudo chmod +x /opt/adspace/wifi-setup-api \
-	     && sudo systemctl start adspace-setup-api.service"
+	     && sudo systemctl start adspace-setup-api.service || true"
 
+# ── Diagnostics ───────────────────────────────────────────────────────────────
 logs:
-	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -f"
+	$(SSH) "sudo journalctl -u adspace-watchdog -u adspace-kiosk -u adspace-setup-api -u adspace-bootstrap -f"
 
 screenshot:
 	$(SSH) "sudo -u adspace sh -c 'WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1001 grim /tmp/adspace-screen.png'"
