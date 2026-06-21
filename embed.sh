@@ -114,7 +114,7 @@ echo "pi:${HASHED}" > "$MOUNT_DIR/userconf.txt"
 # then deletes it and reboots. We use it to copy our files into the rootfs and
 # enable adspace-bootstrap.service.
 log "Writing firstrun.sh..."
-cat > "$MOUNT_DIR/firstrun.sh" << 'FIRSTRUN'
+cat > "$MOUNT_DIR/firstrun.sh" << FIRSTRUN
 #!/bin/bash
 # AdSpace firstrun — runs once on Boot 1 via RPi OS firstrun mechanism.
 # Copies bootstrap.sh into rootfs and enables adspace-bootstrap.service.
@@ -125,14 +125,21 @@ logger -t adspace-firstrun "Starting AdSpace firstrun setup..."
 
 BOOT="/boot/firmware"
 
+# Set pi user password (userconf.txt is skipped when firstrun.sh is present)
+echo "pi:${HASHED}" | chpasswd -e
+logger -t adspace-firstrun "pi user password set"
+
+# Enable SSH
+systemctl enable ssh 2>/dev/null || true
+
 # Copy bootstrap script into rootfs
 mkdir -p /opt/adspace
-cp "$BOOT/adspace-bootstrap.sh" /opt/adspace/bootstrap.sh
+cp "\$BOOT/adspace-bootstrap.sh" /opt/adspace/bootstrap.sh
 chmod +x /opt/adspace/bootstrap.sh
 logger -t adspace-firstrun "bootstrap.sh copied to /opt/adspace/"
 
 # Copy and enable the service unit
-cp "$BOOT/adspace-bootstrap.service" /etc/systemd/system/adspace-bootstrap.service
+cp "\$BOOT/adspace-bootstrap.service" /etc/systemd/system/adspace-bootstrap.service
 systemctl daemon-reload
 systemctl enable adspace-bootstrap.service
 logger -t adspace-firstrun "adspace-bootstrap.service enabled — will run on next boot"
