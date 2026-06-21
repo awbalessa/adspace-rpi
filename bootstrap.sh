@@ -173,6 +173,9 @@ WIFI_SCAN_CACHE="/tmp/adspace-wifi-scan.json"
 log() { echo "adspace-watchdog: $*"; logger -t adspace-watchdog "$*"; }
 
 is_connected() {
+    # Check NM's connectivity state — 'full' means actual internet, not just a profile activated.
+    # The old approach (checking activated profiles) fails because NM keeps ethernet profiles
+    # in 'activated' state even after the cable is unplugged, causing false positives.
     local state
     state=$(nmcli networking connectivity 2>/dev/null)
     [ "$state" = "full" ]
@@ -260,6 +263,9 @@ while true; do
         fi
     else
         fail_count=$((fail_count + 1))
+        # Require 2 consecutive failed checks (~30s) before entering setup mode.
+        # Prevents a momentary NM connectivity probe failure from triggering
+        # a full setup mode transition.
         if [ "$fail_count" -lt 2 ]; then
             sleep 15
             continue
@@ -270,6 +276,7 @@ while true; do
             last_state="setup"
             setup_cycles=0
         else
+            # Every 4 cycles (~60s) while in setup, try reconnecting to saved networks
             setup_cycles=$((setup_cycles + 1))
             if [ "$setup_cycles" -ge 4 ]; then
                 setup_cycles=0
@@ -288,10 +295,13 @@ cat > /opt/adspace/start-display.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Call the chromium binary directly — bypasses RPi launcher wrapper which
+# injects --js-flags=--no-decommit-pooled-pages (unsupported flag, causes crash)
 unset CHROMIUM_FLAGS
 CHROMIUM_BIN=/usr/lib/chromium/chromium
 
 if [ -f /tmp/adspace-setup-mode ]; then
+    # Wait for Caddy to be ready before launching browser
     for i in $(seq 1 10); do
         curl -sf http://localhost/ >/dev/null 2>&1 && break
         sleep 1
