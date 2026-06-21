@@ -21,7 +21,6 @@ set -euo pipefail
 
 DONE_FLAG="/etc/adspace-bootstrap-done"
 GITHUB_REPO="awbalessa/adspace-rpi"
-GITHUB_TOKEN="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"
 TAILSCALE_OAUTH_SECRET="tskey-client-koZCgE2fK421CNTRL-WAfqtB3SRXSeqKSUgJTcWSjoD1vxFbGF"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -527,7 +526,7 @@ log "Fetching latest release from github.com/$GITHUB_REPO..."
 
 # Get the latest release download URLs
 RELEASE_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-RELEASE_JSON=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" "$RELEASE_API") || die "Failed to fetch release info from GitHub"
+RELEASE_JSON=$(curl -sf "$RELEASE_API") || die "Failed to fetch release info from GitHub"
 
 API_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "wifi-setup-api") | .browser_download_url')
 DIST_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "wifi-setup-dist.tar.gz") | .browser_download_url')
@@ -539,13 +538,13 @@ RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
 log "Pulling release $RELEASE_TAG..."
 
 # Download API binary
-curl -fSL -H "Authorization: Bearer $GITHUB_TOKEN" "$API_URL" -o /opt/adspace/wifi-setup-api
+curl -fSL "$API_URL" -o /opt/adspace/wifi-setup-api
 chmod +x /opt/adspace/wifi-setup-api
 chown adspace:adspace /opt/adspace/wifi-setup-api
 log "wifi-setup-api downloaded"
 
 # Download + unpack frontend
-curl -fSL -H "Authorization: Bearer $GITHUB_TOKEN" "$DIST_URL" -o /tmp/wifi-setup-dist.tar.gz
+curl -fSL "$DIST_URL" -o /tmp/wifi-setup-dist.tar.gz
 tar -xzf /tmp/wifi-setup-dist.tar.gz -C /opt/adspace/wifi-setup/dist
 rm /tmp/wifi-setup-dist.tar.gz
 # Never overwrite config.json — watchdog writes it at runtime
