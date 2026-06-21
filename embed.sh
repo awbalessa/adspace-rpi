@@ -89,16 +89,26 @@ log "Mounted at $MOUNT_DIR"
 # ── Hash the password ─────────────────────────────────────────────────────────
 HASHED=$(echo "$PI_PASSWORD" | openssl passwd -6 -stdin)
 
-# ── Read bootstrap.sh and service file contents for embedding ─────────────────
-BOOTSTRAP_CONTENT=$(cat "$REPO_DIR/bootstrap.sh")
-SERVICE_CONTENT=$(cat "$REPO_DIR/adspace-bootstrap.service")
-
 # ── Write cloud-init user-data ────────────────────────────────────────────────
-# This image uses cloud-init (not firstboot/firstrun.sh).
-# user-data is the correct and only mechanism that runs on first boot.
+# Use Python to build user-data — avoids shell variable expansion mangling
+# bootstrap.sh content (which contains $VAR, $(), etc.).
 log "Writing cloud-init user-data..."
-cat > "$MOUNT_DIR/user-data" << USERDATA
-#cloud-config
+python3 - "$REPO_DIR/bootstrap.sh" \
+          "$REPO_DIR/adspace-bootstrap.service" \
+          "$MOUNT_DIR/user-data" \
+          "$HASHED" << 'PYEOF'
+import sys, textwrap
+
+bootstrap_path, service_path, out_path, hashed = sys.argv[1:]
+
+bootstrap = open(bootstrap_path).read()
+service   = open(service_path).read()
+
+def indent(text, spaces=6):
+    pad = ' ' * spaces
+    return '\n'.join(pad + line for line in text.splitlines())
+
+user_data = f"""#cloud-config
 
 # AdSpace — first boot provisioning via cloud-init
 
@@ -110,7 +120,7 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
-    passwd: "${HASHED}"
+    passwd: "{hashed}"
 
 # Enable SSH with password authentication
 ssh_pwauth: true
@@ -121,21 +131,24 @@ write_files:
     permissions: '0755'
     owner: root:root
     content: |
-$(echo "$BOOTSTRAP_CONTENT" | sed 's/^/      /')
+{indent(bootstrap)}
 
   - path: /etc/systemd/system/adspace-bootstrap.service
     permissions: '0644'
     owner: root:root
     content: |
-$(echo "$SERVICE_CONTENT" | sed 's/^/      /')
+{indent(service)}
 
-# Enable SSH and bootstrap service, then run bootstrap
+# Enable SSH and bootstrap service
 runcmd:
   - systemctl enable ssh
   - systemctl start ssh
   - systemctl enable adspace-bootstrap.service
   - systemctl start adspace-bootstrap.service
-USERDATA
+"""
+
+open(out_path, 'w').write(user_data)
+PYEOF
 
 log "user-data written ($(wc -l < "$MOUNT_DIR/user-data") lines)"
 
