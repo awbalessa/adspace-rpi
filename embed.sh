@@ -9,28 +9,24 @@
 #   ./embed.sh <path-to-rpios-lite.img> [output.img]
 #
 # EXAMPLE:
-#   ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.3.img
+#   ./embed.sh ~/Downloads/2026-06-18-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.5.img
 #
 # REQUIREMENTS (Mac):
 #   hdiutil — built into macOS, no install needed
 #   openssl — built into macOS, no install needed
 #
-# WHAT IT DOES:
-#   Mounts the FAT32 boot partition and writes:
-#     custom.toml    — RPi OS Trixie native: sets pi user password + enables SSH
-#     firstrun.sh    — copies bootstrap files into rootfs, enables service
-#     adspace-bootstrap.sh       — full provisioning script
-#     adspace-bootstrap.service  — systemd unit
-#
 # HOW IT WORKS:
-#   RPi OS Trixie firstboot runs in this order:
-#     1. Processes custom.toml  → sets pi password, enables SSH (rw, clean)
-#     2. Runs firstrun.sh       → copies our files into rootfs, enables service
-#     3. Reboots
-#   Boot 2: adspace-bootstrap.service runs → full provisioning (~10 min)
-#   Boot 3+: Normal kiosk/setup operation
+#   This RPi OS Trixie image uses cloud-init (not the firstboot/firstrun.sh
+#   mechanism). We replace user-data with a cloud-init config that:
+#     - Creates the pi user with a known password
+#     - Enables SSH with password authentication
+#     - Copies bootstrap.sh into /opt/adspace/ via write_files
+#     - Installs and enables adspace-bootstrap.service via write_files
+#     - Runs bootstrap.sh on first boot via runcmd
 #
-# IDEMPOTENT: safe to re-run — always starts fresh from input image.
+#   All files also placed on the boot partition so cloud-init can reference them.
+#
+# IDEMPOTENT: always starts fresh from the input image.
 # =============================================================================
 
 set -euo pipefail
@@ -42,7 +38,7 @@ die()  { echo -e "${RED}[embed]${NC} ERROR: $*" >&2; exit 1; }
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Pi SSH credentials baked into every image ─────────────────────────────────
+# ── Credentials ───────────────────────────────────────────────────────────────
 PI_PASSWORD="adspace"
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -59,29 +55,24 @@ OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
 log "Input:  $INPUT_IMG"
 log "Output: $OUTPUT_IMG"
 
-# ── Copy image (always starts fresh from input) ───────────────────────────────
-log "Copying image (this takes a moment)..."
+# ── Copy image ────────────────────────────────────────────────────────────────
+log "Copying image..."
 cp "$INPUT_IMG" "$OUTPUT_IMG"
 
-# ── Attach image, find FAT32 boot partition ───────────────────────────────────
+# ── Attach + mount boot partition ─────────────────────────────────────────────
 log "Attaching image..."
 HDIUTIL_OUT=$(hdiutil attach "$OUTPUT_IMG" \
-    -imagekey diskimage-class=CRawDiskImage \
-    -nomount 2>&1)
+    -imagekey diskimage-class=CRawDiskImage -nomount 2>&1)
 
 WHOLE_DISK=$(echo "$HDIUTIL_OUT" | awk 'NR==1{print $1}')
 DISK_DEV=$(echo "$HDIUTIL_OUT"   | awk '/Windows_FAT/{print $1}' | head -1)
 
-if [[ -z "$DISK_DEV" ]]; then
+[[ -n "$DISK_DEV" ]] || {
     hdiutil detach "$WHOLE_DISK" 2>/dev/null || true
     die "Could not find FAT32 boot partition.\nhdiutil output:\n$HDIUTIL_OUT"
-fi
+}
 
-log "Boot partition device: $DISK_DEV"
-
-# ── Mount ─────────────────────────────────────────────────────────────────────
 MOUNT_DIR=$(mktemp -d)
-
 cleanup() {
     sync 2>/dev/null || true
     umount "$MOUNT_DIR" 2>/dev/null || diskutil unmount force "$DISK_DEV" 2>/dev/null || true
@@ -95,71 +86,63 @@ mount_msdos "$DISK_DEV" "$MOUNT_DIR" \
 
 log "Mounted at $MOUNT_DIR"
 
-# ── Hash password ─────────────────────────────────────────────────────────────
+# ── Hash the password ─────────────────────────────────────────────────────────
 HASHED=$(echo "$PI_PASSWORD" | openssl passwd -6 -stdin)
 
-# ── userconf.txt — suppresses the Trixie interactive username prompt ──────────
-# RPi OS Trixie shows an interactive "enter new username" wizard on tty1 if no
-# user is pre-configured. Writing userconf.txt suppresses this prompt.
-# custom.toml then sets the actual password properly during firstboot.
-log "Writing userconf.txt (suppress interactive prompt)..."
-echo "pi:${HASHED}" > "$MOUNT_DIR/userconf.txt"
+# ── Read bootstrap.sh and service file contents for embedding ─────────────────
+BOOTSTRAP_CONTENT=$(cat "$REPO_DIR/bootstrap.sh")
+SERVICE_CONTENT=$(cat "$REPO_DIR/adspace-bootstrap.service")
 
-# ── custom.toml — user credentials + SSH (RPi OS Trixie native) ──────────────
-# Processed by RPi OS firstboot with rw access via the userconf-pi mechanism.
-log "Writing custom.toml (pi credentials + SSH)..."
-cat > "$MOUNT_DIR/custom.toml" << CUSTOMTOML
-config_version = 1
+# ── Write cloud-init user-data ────────────────────────────────────────────────
+# This image uses cloud-init (not firstboot/firstrun.sh).
+# user-data is the correct and only mechanism that runs on first boot.
+log "Writing cloud-init user-data..."
+cat > "$MOUNT_DIR/user-data" << USERDATA
+#cloud-config
 
-[user]
-name = "pi"
-password = "${HASHED}"
-password_encrypted = true
+# AdSpace — first boot provisioning via cloud-init
 
-[ssh]
-enabled = true
-password_authentication = true
-CUSTOMTOML
+# Create pi user with known password and sudo access
+users:
+  - name: pi
+    gecos: Pi User
+    groups: [adm, dialout, cdrom, sudo, audio, video, plugdev, games, users, input, render, netdev, spi, i2c, gpio]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: "${HASHED}"
 
-# ── firstrun.sh — copies bootstrap into rootfs, enables service ───────────────
-# RPi OS runs this after custom.toml is applied, then deletes it and reboots.
-# At this point the filesystem is read-write, so copies work fine.
-log "Writing firstrun.sh..."
-cat > "$MOUNT_DIR/firstrun.sh" << 'FIRSTRUN'
-#!/bin/bash
-# AdSpace firstrun — runs once on Boot 1.
-# RPi OS deletes this file and reboots after it exits.
-logger -t adspace-firstrun "AdSpace firstrun starting..."
+# Enable SSH with password authentication
+ssh_pwauth: true
 
-BOOT="/boot/firmware"
+# Write bootstrap.sh and service unit directly to the filesystem
+write_files:
+  - path: /opt/adspace/bootstrap.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+$(echo "$BOOTSTRAP_CONTENT" | sed 's/^/      /')
 
-mkdir -p /opt/adspace
-cp "$BOOT/adspace-bootstrap.sh" /opt/adspace/bootstrap.sh
-chmod +x /opt/adspace/bootstrap.sh
+  - path: /etc/systemd/system/adspace-bootstrap.service
+    permissions: '0644'
+    owner: root:root
+    content: |
+$(echo "$SERVICE_CONTENT" | sed 's/^/      /')
 
-cp "$BOOT/adspace-bootstrap.service" /etc/systemd/system/adspace-bootstrap.service
-systemctl daemon-reload
-systemctl enable adspace-bootstrap.service
+# Enable SSH and bootstrap service, then run bootstrap
+runcmd:
+  - systemctl enable ssh
+  - systemctl start ssh
+  - systemctl enable adspace-bootstrap.service
+  - systemctl start adspace-bootstrap.service
+USERDATA
 
-logger -t adspace-firstrun "adspace-bootstrap.service enabled — provisioning on next boot"
-FIRSTRUN
-chmod +x "$MOUNT_DIR/firstrun.sh"
+log "user-data written ($(wc -l < "$MOUNT_DIR/user-data") lines)"
 
-# ── bootstrap.sh + service unit ───────────────────────────────────────────────
-log "Copying bootstrap.sh and service unit..."
-cp "$REPO_DIR/bootstrap.sh"              "$MOUNT_DIR/adspace-bootstrap.sh"
-cp "$REPO_DIR/adspace-bootstrap.service" "$MOUNT_DIR/adspace-bootstrap.service"
-
-log "Boot partition contents:"
-ls -lh \
-    "$MOUNT_DIR/userconf.txt" \
-    "$MOUNT_DIR/custom.toml" \
-    "$MOUNT_DIR/firstrun.sh" \
-    "$MOUNT_DIR/adspace-bootstrap.sh" \
-    "$MOUNT_DIR/adspace-bootstrap.service"
+log "Boot partition key files:"
+ls -lh "$MOUNT_DIR/user-data" "$MOUNT_DIR/meta-data" 2>/dev/null || true
 
 log "Unmounting..."
-# trap EXIT handles cleanup
 
 log ""
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -169,8 +152,8 @@ log "  Flash with Raspberry Pi Imager — no customisation needed."
 log "  pi user password: $PI_PASSWORD"
 log ""
 log "  On first boot (plug in ethernet):"
-log "    Boot 1 (~1 min):   custom.toml sets pi password + SSH"
-log "                       firstrun.sh copies bootstrap, enables service"
-log "    Boot 2 (~10 min):  bootstrap installs everything, pulls from GitHub"
-log "    Boot 3:            Kiosk is live at https://screen.adspace.so"
+log "    Boot 1: cloud-init runs — creates pi user, enables SSH,"
+log "            installs bootstrap.sh, starts adspace-bootstrap.service"
+log "    ~10 min: bootstrap installs everything, registers Tailscale"
+log "    After:   Kiosk is live at https://screen.adspace.so"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
