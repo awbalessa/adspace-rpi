@@ -36,7 +36,7 @@ Tailscale is how you SSH into any Pi from anywhere — no VPN config, no IP addr
 
 ### 2. Install dev tools
 ```bash
-brew install go pnpm e2fsprogs
+brew install go pnpm
 ```
 
 That's it. You can now SSH into any Pi and set up new ones.
@@ -164,7 +164,7 @@ rpi/
 ### Requirements
 - Raspberry Pi 5 (4GB or 8GB)
 - SD card (16GB+)
-- Mac with `brew install go pnpm e2fsprogs`
+- Mac with `brew install go pnpm`
 - Ethernet cable (required for first-boot provisioning)
 - Vanilla **Raspberry Pi OS Lite 64-bit** `.img` from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
 

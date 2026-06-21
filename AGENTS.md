@@ -26,7 +26,7 @@ Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
 
 **To cut a new base image (Mac-side, one time):**
 ```bash
-brew install e2fsprogs   # required for debugfs
+# no extra tools needed — hdiutil is built into macOS
 ./embed.sh ~/Downloads/rpios-lite.img
 # Outputs: adspace-tv.img — flash this with Raspberry Pi Imager
 ```
@@ -440,4 +440,4 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Checking NM connection profile state for connectivity | Profiles stay `activated` even with cable unplugged — use `nmcli networking connectivity` |
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
 | Editing watchdog.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
-| Running embed.sh without e2fsprogs | `debugfs` not found — run `brew install e2fsprogs` first |
+| Running embed.sh on Linux | embed.sh uses hdiutil which is macOS-only — run it on a Mac |
