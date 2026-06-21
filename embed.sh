@@ -98,10 +98,15 @@ log "Mounted at $MOUNT_DIR"
 # ── Hash password ─────────────────────────────────────────────────────────────
 HASHED=$(echo "$PI_PASSWORD" | openssl passwd -6 -stdin)
 
+# ── userconf.txt — suppresses the Trixie interactive username prompt ──────────
+# RPi OS Trixie shows an interactive "enter new username" wizard on tty1 if no
+# user is pre-configured. Writing userconf.txt suppresses this prompt.
+# custom.toml then sets the actual password properly during firstboot.
+log "Writing userconf.txt (suppress interactive prompt)..."
+echo "pi:${HASHED}" > "$MOUNT_DIR/userconf.txt"
+
 # ── custom.toml — user credentials + SSH (RPi OS Trixie native) ──────────────
-# Processed by RPi OS firstboot BEFORE firstrun.sh — runs with rw access,
-# uses the proper userconf-pi mechanism. Does NOT conflict with firstrun.sh
-# as long as firstrun.sh doesn't call userconf itself.
+# Processed by RPi OS firstboot with rw access via the userconf-pi mechanism.
 log "Writing custom.toml (pi credentials + SSH)..."
 cat > "$MOUNT_DIR/custom.toml" << CUSTOMTOML
 config_version = 1
@@ -147,6 +152,7 @@ cp "$REPO_DIR/adspace-bootstrap.service" "$MOUNT_DIR/adspace-bootstrap.service"
 
 log "Boot partition contents:"
 ls -lh \
+    "$MOUNT_DIR/userconf.txt" \
     "$MOUNT_DIR/custom.toml" \
     "$MOUNT_DIR/firstrun.sh" \
     "$MOUNT_DIR/adspace-bootstrap.sh" \
