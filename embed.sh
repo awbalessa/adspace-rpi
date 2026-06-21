@@ -52,7 +52,7 @@ PI_PASSWORD="adspace"
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 INPUT_IMG="${1:-}"
-OUTPUT_IMG="${2:-${REPO_DIR}/adspace-tv.img}"
+OUTPUT_IMG="${2:-${REPO_DIR}/images/adspace-tv.img}"
 
 [[ -n "$INPUT_IMG" ]]  || die "Usage: ./embed.sh <rpios-lite.img> [output.img]"
 [[ -f "$INPUT_IMG" ]]  || die "Input image not found: $INPUT_IMG"
