@@ -19,16 +19,17 @@ The entire provisioning model is runtime — a vanilla RPi OS Lite image is used
 
 **Boot sequence on a new Pi:**
 ```
-Boot 1: RPi OS firstrun.sh runs → copies bootstrap.sh, enables adspace-bootstrap.service → reboots
+Boot 1: cloud-init runs → creates pi user (password: adspace), enables SSH,
+        writes bootstrap.sh + service unit, starts adspace-bootstrap.service → reboots
 Boot 2: adspace-bootstrap.service runs → full provisioning (~10 min, needs ethernet) → reboots
 Boot 3+: Normal operation — adspace-watchdog controls kiosk/setup transitions
 ```
 
 **To cut a new base image (Mac-side, one time):**
 ```bash
-# no extra tools needed — hdiutil is built into macOS
-./embed.sh ~/Downloads/rpios-lite.img
-# Outputs: adspace-tv.img — flash this with Raspberry Pi Imager
+# hdiutil + python3 are built into macOS — no extra tools needed
+./embed.sh ~/Downloads/2026-xx-xx-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
+# Outputs: images/adspace-tv-v0.1.9.img — flash this with Raspberry Pi Imager (no customisation)
 ```
 
 **There is no `provision.sh`, `flash.sh`, or `prepare-image.sh`.** Those are gone. `bootstrap.sh` is the single source of truth for what's on a Pi.
@@ -218,7 +219,7 @@ dtparam=hdmi_force_hotplug=1
 
 ## Bootstrap service
 
-`adspace-bootstrap.service` runs **once per device** on Boot 2 (after firstrun triggers a reboot). It does full provisioning from scratch:
+`adspace-bootstrap.service` runs **once per device** on Boot 2 (after cloud-init triggers a reboot). It does full provisioning from scratch:
 
 1. Waits for internet (retry loop, no timeout)
 2. Installs all packages: chromium, cage, libwlroots-0.18, caddy, NetworkManager, grim, jq, etc.
@@ -253,7 +254,7 @@ ssh pi@adspace-{serial} "sudo /opt/adspace/bootstrap.sh"
 
 | Path | Purpose |
 |------|---------|
-| `/opt/adspace/bootstrap.sh` | Full provisioning script — written by embed.sh/firstrun.sh |
+| `/opt/adspace/bootstrap.sh` | Full provisioning script — written by cloud-init via embed.sh |
 | `/opt/adspace/watchdog.sh` | Main control loop — do not edit in place, push from repo |
 | `/opt/adspace/start-display.sh` | Single display launcher — checks setup flag, starts correct Chromium |
 | `/opt/adspace/kiosk.env` | `ADSPACE_URL` env var |
@@ -441,3 +442,6 @@ ssh pi@adspace-{serial} "ss -tlnp | grep 3000"
 | Using legacy `hdmi_force_hotplug=1` in config.txt | Silently ignored on Pi 5 — use `dtparam=hdmi_force_hotplug=1` under `[all]` |
 | Editing watchdog.sh without updating bootstrap.sh | Newly provisioned Pis get the old embedded version from bootstrap.sh |
 | Running embed.sh on Linux | embed.sh uses hdiutil which is macOS-only — run it on a Mac |
+| Using unquoted heredoc in embed.sh | Bash expands `$VAR`/`$()` inside bootstrap.sh content → file written as 0 bytes; use Python or quoted `<< 'DELIM'` with no expansions needed |
+| Inline Caddyfile handle blocks | `handle /path { ... }` on one line is rejected by Caddy 2.6.2 — always use multiline blocks |
+| Customising the image in Raspberry Pi Imager | User-data already creates the pi user with password `adspace` and enables SSH — Imager customisation conflicts with cloud-init and is not needed |

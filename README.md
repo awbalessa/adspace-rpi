@@ -133,7 +133,7 @@ rpi/
 
 ```
 /opt/adspace/
-├── bootstrap.sh              # Full provisioning script (written by embed.sh/firstrun.sh)
+├── bootstrap.sh              # Full provisioning script (written by cloud-init via embed.sh)
 ├── watchdog.sh               # Main control loop (run by systemd)
 ├── start-display.sh          # Launches Chromium — kiosk or setup mode based on flag
 ├── kiosk.env                 # ADSPACE_URL env var
@@ -164,40 +164,41 @@ rpi/
 ### Requirements
 - Raspberry Pi 5 (4GB or 8GB)
 - SD card (16GB+)
-- Mac with `brew install go pnpm`
+- Mac (`hdiutil` + `python3` are built in — no extras needed for image building)
+- `brew install go pnpm` for frontend/API development
 - Ethernet cable (required for first-boot provisioning)
-- Vanilla **Raspberry Pi OS Lite 64-bit** `.img` from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
+- Vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** `.img` from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
 
 ### Step 1 — Build the base image (one time, reuse for all Pis)
 ```bash
-./embed.sh ~/Downloads/2025-xx-xx-raspios-bookworm-arm64-lite.img
-# Outputs: adspace-tv.img in the repo root
+./embed.sh ~/Downloads/2026-xx-xx-raspios-trixie-arm64-lite.img images/adspace-tv-v0.1.9.img
+# Outputs: images/adspace-tv-v0.1.9.img
 ```
 
-This injects `bootstrap.sh` + `adspace-bootstrap.service` into the vanilla image so the Pi self-provisions on first boot. You only need to do this once — reuse `adspace-tv.img` for every Pi.
+Downloads the vanilla **Raspberry Pi OS Lite 64-bit (Trixie)** image from [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/) and injects `bootstrap.sh` via cloud-init. You only need to do this once — reuse the output image for every Pi.
+
+> `embed.sh` requires macOS (`hdiutil` + `python3` — both built in, no brew installs needed).
 
 ### Step 2 — Flash the image
 Open **Raspberry Pi Imager**:
-- OS: **Use Custom** → select `adspace-tv.img`
+- OS: **Use Custom** → select `images/adspace-tv-v0.1.9.img`
 - Storage: your SD card
-- In OS Customisation (the gear icon):
-  - Set **username** to `pi` and a password (needed for first SSH before Tailscale connects)
-  - Enable **SSH** (password authentication)
-  - Leave everything else blank (hostname, WiFi — bootstrap handles them)
+- **Do not customise** — no username, no SSH, no WiFi. Everything is baked in.
 - Flash
 
 ### Step 3 — Boot and wait
 Insert SD card, plug in ethernet, power on. Then:
 
 ```
-Boot 1 (~1 min):  RPi firstrun.sh enables adspace-bootstrap.service → reboots
-Boot 2 (~10 min): bootstrap.sh runs — installs packages, pulls app from GitHub, registers Tailscale → reboots
+Boot 1 (~1 min):  cloud-init runs → creates pi user, enables SSH, starts adspace-bootstrap.service → reboots
+Boot 2 (~10 min): bootstrap.sh runs — installs packages, pulls app from GitHub Releases, registers Tailscale → reboots
 Boot 3:           Kiosk is live at https://screen.adspace.so
 ```
 
-You can follow Boot 2 progress by SSH-ing in via IP (find it on your router) and watching:
+You can follow Boot 2 progress by SSH-ing in via LAN IP (find it on your router) with password `adspace`:
 ```bash
-ssh pi@<ip> "sudo journalctl -u adspace-bootstrap -f"
+ssh pi@<ip>   # password: adspace
+sudo journalctl -u adspace-bootstrap -f
 ```
 
 ### Step 4 — Verify
