@@ -27,7 +27,7 @@ if [ -f /tmp/adspace-setup-mode ]; then
         --password-store=basic \
         --disk-cache-size=1 \
         --user-data-dir=/home/adspace/.config/adspace-setup-chromium \
-        "http://localhost/"
+        "http://localhost/tv"
 else
     source /opt/adspace/kiosk.env
     exec "$CHROMIUM_BIN" \
